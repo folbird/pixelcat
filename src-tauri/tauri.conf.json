@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "",
-        "width": 144,
-        "height": 112,
+        "width": 128,
+        "height": 128,
         "resizable": false,
         "decorations": false,
         "transparent": true,

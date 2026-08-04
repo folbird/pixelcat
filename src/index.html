@@ -9,18 +9,162 @@
       padding: 0;
       background: transparent;
       overflow: hidden;
+      width: 100%;
+      height: 100%;
     }
     #pet {
+      position: fixed;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 128px;
+      height: 128px;
       image-rendering: pixelated;
       cursor: grab;
+      transition: top 0.18s ease, width 0.18s ease, height 0.18s ease;
+      transform-origin: center bottom;
     }
     #pet:active {
       cursor: grabbing;
     }
+
+    /* 待机时模拟参考项目里的呼吸、眨眼和睡觉状态。 */
+    body.pet-idle #pet {
+      animation: idle-breathe 2.4s ease-in-out infinite;
+    }
+
+    body.pet-blink #pet {
+      animation: idle-blink 0.16s ease-in-out;
+    }
+
+    body.pet-sleep #pet {
+      animation: sleep-breathe 3.2s ease-in-out infinite;
+      filter: saturate(0.72) brightness(0.86);
+    }
+
+    body.pet-typing #pet {
+      animation: typing-hop 0.18s ease-out;
+    }
+
+    @keyframes idle-breathe {
+      0%, 100% { transform: translateX(-50%) translateY(0) scaleY(1); }
+      50% { transform: translateX(-50%) translateY(-1px) scaleY(1.015); }
+    }
+
+    @keyframes idle-blink {
+      0%, 100% { transform: translateX(-50%) scaleY(1); }
+      45%, 65% { transform: translateX(-50%) scaleY(0.86); }
+    }
+
+    @keyframes sleep-breathe {
+      0%, 100% { transform: translateX(-50%) translateY(1px) scaleY(0.96); }
+      50% { transform: translateX(-50%) translateY(2px) scaleY(0.985); }
+    }
+
+    @keyframes typing-hop {
+      0% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(-2px); }
+      100% { transform: translateX(-50%) translateY(0); }
+    }
+
+    body.pomodoro-active #pet {
+      top: 32px;
+    }
+
+    body.water-active #pet {
+      top: 0;
+      width: 256px;
+      height: 256px;
+    }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-4px);
+      max-width: 236px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      color: #fff;
+      background: rgba(40, 40, 40, 0.88);
+      border-radius: 8px;
+      text-align: center;
+      line-height: 1.35;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      z-index: 99;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    #pomodoro-display {
+      position: fixed;
+      top: 4px;
+      left: 50%;
+      transform: translateX(-50%);
+      min-width: 72px;
+      padding: 3px 8px;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #fff;
+      text-align: center;
+      letter-spacing: 0;
+      background: rgba(30, 30, 30, 0.78);
+      border-radius: 8px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease;
+      box-sizing: border-box;
+      z-index: 80;
+    }
+    body.pomodoro-active #pomodoro-display {
+      opacity: 1;
+    }
+    body.pomodoro-paused #pomodoro-display {
+      opacity: 0.48;
+    }
+
+    #sleep-z {
+      position: fixed;
+      top: 8px;
+      right: 4px;
+      color: #4f78c8;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1;
+      opacity: 0;
+      transform: translate(2px, 5px) scale(0.7);
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 75;
+    }
+
+    body.pet-sleep #sleep-z {
+      opacity: 0.88;
+      transform: translate(0, 0) scale(1);
+      animation: sleep-z 2.2s ease-in-out infinite;
+    }
+
+    @keyframes sleep-z {
+      0%, 100% { transform: translate(0, 3px) scale(0.9); }
+      50% { transform: translate(4px, -2px) scale(1.08); }
+    }
   </style>
 </head>
 <body>
+  <div id="pomodoro-display">25:00</div>
   <canvas id="pet"></canvas>
+  <div id="sleep-z" aria-hidden="true">Z</div>
+  <div id="toast"></div>
+
   <script src="./main.js"></script>
 </body>
 </html>

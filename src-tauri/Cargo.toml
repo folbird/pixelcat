@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -21,4 +21,9 @@ keytap = "0.4.0"
 objc2 = { version = "0.6.4", features = ["objc2-proc-macros"] }
 objc2-foundation = "0.3.2"
 objc2-app-kit = "0.3.2"
+
+# macOS 全屏覆盖：普通 NSWindow 物理上无法画在全屏窗口之上，
+# 必须把窗口 swizzle 成 NSPanel 才行。这是 BongoCat 等桌面宠物
+# 和 Tauri 官方 fullscreen 示例的通用做法。
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 

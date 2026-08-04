@@ -1,73 +1,532 @@
-use objc2::runtime::NSObject;
 use keytap::{EventKind, Tap};
-use tauri::{Emitter, Manager};
-
-/// macOS: 让窗口浮在所有 Space 之上、不被台前调度(Stage Manager)收纳，
-/// 并且在其他应用全屏时仍然可见。
-///
-/// NSWindowCollectionBehavior 位掩码:
-///   CanJoinAllSpaces          = 1 << 0 = 1
-///   MoveToActiveSpace         = 1 << 1 = 2
-///   Transient                 = 1 << 2 = 4
-///   Stationary                = 1 << 4 = 16
-///   FullScreenAuxiliary       = 1 << 8 = 256
 #[cfg(target_os = "macos")]
-fn make_window_float_on_all_spaces(window: &tauri::WebviewWindow) {
-    use objc2::msg_send;
+use std::ffi::c_void;
+#[cfg(target_os = "macos")]
+use std::ptr;
+#[cfg(target_os = "macos")]
+use std::sync::Mutex;
+use std::time::Duration;
+use tauri::menu::CheckMenuItem;
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{
+    Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow,
+};
+use tauri_nspanel::{tauri_panel, PanelLevel, StyleMask, WebviewWindowExt};
 
-    match window.ns_window() {
-        Ok(ptr) => {
-            let ns_window: *mut NSObject = ptr as *mut NSObject;
-            if ns_window.is_null() {
-                return;
-            }
-            // 关键标志：
-            // CanJoinAllSpaces (1) + Transient (4) + Stationary (16) + FullScreenAuxiliary (256)
-            // FullScreenAuxiliary 让窗口在其他应用全屏时仍然可见
-            let flags: u64 = 1 | 4 | 16 | 256;
+struct AppWindow(Mutex<Option<WebviewWindow>>);
+struct PanelExpanded(Mutex<bool>);
+struct WaterRestoreState(Mutex<Option<WindowSnapshot>>);
+
+/// 「窗口置顶」开关状态。右键菜单与 Tray 菜单共享同一份状态。
+struct AlwaysOnTop(Mutex<bool>);
+
+/// Tray 菜单里 id="pin" 的勾选项引用，便于勾选状态同步。
+struct TrayPinItem(Mutex<Option<CheckMenuItem<tauri::Wry>>>);
+
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const PET_SIZE: f64 = 128.0;
+const POMODORO_WIDTH: f64 = 128.0;
+const POMODORO_HEIGHT: f64 = 160.0;
+const WATER_SIZE: f64 = 256.0;
+
+#[derive(Clone, Copy)]
+struct WindowSnapshot {
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    pomodoro_expanded: bool,
+}
+
+tauri_panel! {
+    panel!(BasicPanel {
+        config: {
+            can_become_key_window: true,
+            is_floating_panel: true
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct CursorPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventCreate(source: *const c_void) -> *const c_void;
+    fn CGEventGetLocation(event: *const c_void) -> CursorPoint;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(value: *const c_void);
+}
+
+#[cfg(target_os = "macos")]
+fn make_panel_float_on_top(window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::NSObject;
+
+    let panel = match window.to_panel::<BasicPanel>() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    panel.set_level(PanelLevel::Floating.value());
+    panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
+
+    if let Ok(ptr) = window.ns_window() {
+        let ns_window: *mut NSObject = ptr as *mut NSObject;
+        if !ns_window.is_null() {
+            let flags: u64 = 1 | 16 | 256 | 1024;
             unsafe {
                 let _: () = msg_send![ns_window, setCollectionBehavior: flags];
             }
         }
-        Err(_) => {}
     }
+}
+
+#[cfg(target_os = "macos")]
+fn start_refresh_loop(app_handle: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        let mut refresh_counter = 0u8;
+        loop {
+            std::thread::sleep(Duration::from_millis(100));
+            refresh_counter = refresh_counter.wrapping_add(1);
+            let h = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                if let Some(window) = h.get_webview_window("main") {
+                    if refresh_counter % 20 == 0 {
+                        make_panel_float_on_top(&window);
+                    }
+
+                    let event = unsafe { CGEventCreate(ptr::null()) };
+                    if event.is_null() {
+                        return;
+                    }
+                    let cursor = unsafe { CGEventGetLocation(event) };
+                    unsafe { CFRelease(event) };
+
+                    if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size())
+                    {
+                        let center_x = position.x as f64 + size.width as f64 / 2.0;
+                        let center_y = position.y as f64 + size.height as f64 / 2.0;
+                        let _ = h.emit(
+                            "cursor-position",
+                            serde_json::json!({
+                                "x": cursor.x,
+                                "y": cursor.y,
+                                "dx": cursor.x - center_x,
+                                "dy": cursor.y - center_y
+                            }),
+                        );
+                    }
+                }
+            });
+        }
+    });
+}
+
+fn center_window(window: &WebviewWindow) {
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let size = window.outer_size().unwrap_or_default();
+        let x = monitor.position().x + (monitor.size().width - size.width) as i32 / 2;
+        let y = monitor.position().y + (monitor.size().height - size.height) as i32 / 2;
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            x, y,
+        )));
+    }
+}
+
+fn set_window_panel_mode(window: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
+    let target_width = if expanded { POMODORO_WIDTH } else { PET_SIZE };
+    let target_height = if expanded { POMODORO_HEIGHT } else { PET_SIZE };
+    let position = window.outer_position().ok();
+    let current_size = window.outer_size().ok();
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let target_physical_width = (target_width * scale).round() as i32;
+    let target_physical_height = (target_height * scale).round() as i32;
+
+    window.set_size(Size::Logical(LogicalSize::new(target_width, target_height)))?;
+
+    if let (Some(position), Some(current_size)) = (position, current_size) {
+        let dx = (target_physical_width - current_size.width as i32) / 2;
+        let dy = (target_physical_height - current_size.height as i32) / 2;
+        let _ = window.set_position(Position::Physical(PhysicalPosition::new(
+            position.x - dx,
+            position.y - dy,
+        )));
+    }
+
+    Ok(())
+}
+
+// ============================================================
+// 菜单
+// ============================================================
+
+fn emit_todo(app: &tauri::AppHandle, name: &str) {
+    let _ = app.emit("show-toast", format!("🚧 「{}」功能敬请期待", name));
+}
+
+fn emit_water_reminder(app: &tauri::AppHandle) {
+    let _ = app.emit("water-reminder-now", ());
+}
+
+fn build_settings_submenu(
+    app: &tauri::AppHandle,
+) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    let pin_checked = *app.state::<AlwaysOnTop>().0.lock().unwrap();
+    let pin_item = CheckMenuItem::with_id(app, "pin", "窗口置顶", true, pin_checked, None::<&str>)?;
+    let center_item = MenuItem::with_id(app, "center", "回到屏幕中央", true, None::<&str>)?;
+    let startup_item = MenuItem::with_id(app, "todo_startup", "开机自启", true, None::<&str>)?;
+    tauri::menu::Submenu::with_items(app, "设置", true, &[&pin_item, &center_item, &startup_item])
+}
+
+fn build_context_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let title = MenuItem::with_id(
+        app,
+        "title",
+        format!("像素猫 v{}", APP_VERSION),
+        false,
+        None::<&str>,
+    )?;
+    let reminder = MenuItem::with_id(app, "water_reminder", "喝水提醒", true, None::<&str>)?;
+    let pomodoro = MenuItem::with_id(app, "pomodoro", "番茄钟", true, None::<&str>)?;
+    let stretch = MenuItem::with_id(app, "todo_stretch", "休息拉伸", true, None::<&str>)?;
+    let settings = build_settings_submenu(app)?;
+    let tell_name = MenuItem::with_id(app, "todo_name", "告诉我名字", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", "隐藏宠物", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出像素猫", true, None::<&str>)?;
+
+    Menu::with_items(
+        app,
+        &[
+            &title,
+            &PredefinedMenuItem::separator(app)?,
+            &reminder,
+            &pomodoro,
+            &stretch,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &tell_name,
+            &PredefinedMenuItem::separator(app)?,
+            &hide,
+            &quit,
+        ],
+    )
+}
+
+fn build_tray_menu(
+    app: &tauri::AppHandle,
+) -> tauri::Result<(Menu<tauri::Wry>, CheckMenuItem<tauri::Wry>)> {
+    let title = MenuItem::with_id(
+        app,
+        "title",
+        format!("像素猫 v{}", APP_VERSION),
+        false,
+        None::<&str>,
+    )?;
+    let show = MenuItem::with_id(app, "show", "显示宠物", true, None::<&str>)?;
+    let pin_checked = *app.state::<AlwaysOnTop>().0.lock().unwrap();
+    let pin_item = CheckMenuItem::with_id(app, "pin", "窗口置顶", true, pin_checked, None::<&str>)?;
+    let center_item = MenuItem::with_id(app, "center", "回到屏幕中央", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出像素猫", true, None::<&str>)?;
+
+    let menu = Menu::with_items(
+        app,
+        &[
+            &title,
+            &PredefinedMenuItem::separator(app)?,
+            &show,
+            &PredefinedMenuItem::separator(app)?,
+            &pin_item,
+            &center_item,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+    Ok((menu, pin_item))
+}
+
+#[tauri::command]
+fn show_context_menu(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+    let menu = build_context_menu(&app).map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    if let Ok(panel) = window.to_panel::<BasicPanel>() {
+        panel.make_key_window();
+    }
+
+    window.popup_menu(&menu).map_err(|e| e.to_string())
+}
+
+fn menu_event_handler(app: &tauri::AppHandle, event: MenuEvent) {
+    let id = event.id().as_ref();
+    let window = app.get_webview_window("main");
+    match id {
+        "quit" => app.exit(0),
+        "center" => {
+            if let Some(ref w) = window {
+                center_window(w);
+            }
+        }
+        "hide" => {
+            if let Some(ref w) = window {
+                let _ = set_window_panel_mode(w, false);
+                if let Ok(mut expanded) = app.state::<PanelExpanded>().0.lock() {
+                    *expanded = false;
+                }
+                let _ = w.hide();
+            }
+        }
+        "show" => {
+            if let Some(ref w) = window {
+                let _ = w.show();
+                #[cfg(target_os = "macos")]
+                make_panel_float_on_top(w);
+            }
+        }
+        "pin" => {
+            let pinned = {
+                let state = app.state::<AlwaysOnTop>();
+                let mut guard = state.0.lock().unwrap();
+                *guard = !*guard;
+                *guard
+            };
+            if let Some(ref w) = window {
+                let _ = w.set_always_on_top(pinned);
+                #[cfg(target_os = "macos")]
+                make_panel_float_on_top(w);
+            }
+            sync_pin_checks(app, pinned);
+        }
+        "pomodoro" => {
+            if let Some(ref w) = window {
+                let _ = set_window_panel_mode(w, true);
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(ref w) = window {
+                if let Ok(panel) = w.to_panel::<BasicPanel>() {
+                    panel.make_key_window();
+                }
+            }
+            let _ = app.emit("open-pomodoro", ());
+        }
+        "water_reminder" => emit_water_reminder(app),
+        "todo_stretch" => emit_todo(app, "休息拉伸"),
+        "todo_name" => emit_todo(app, "告诉我名字"),
+        "todo_startup" => emit_todo(app, "开机自启"),
+        _ => {}
+    }
+}
+
+fn sync_pin_checks(app: &tauri::AppHandle, pinned: bool) {
+    let state = app.state::<TrayPinItem>();
+    let guard = state.0.lock().unwrap();
+    if let Some(item) = guard.as_ref() {
+        let _ = item.set_checked(pinned);
+    }
+}
+
+#[tauri::command]
+fn keep_on_top(state: tauri::State<'_, AppWindow>) {
+    #[cfg(target_os = "macos")]
+    if let Some(ref window) = *state.0.lock().unwrap() {
+        make_panel_float_on_top(window);
+    }
+}
+
+/// JS 调用：让 panel 成为 key window，使 WebView 能接收鼠标点击。
+#[tauri::command]
+fn make_panel_key(state: tauri::State<'_, AppWindow>) {
+    #[cfg(target_os = "macos")]
+    if let Some(ref window) = *state.0.lock().unwrap() {
+        if let Ok(panel) = window.to_panel::<BasicPanel>() {
+            panel.make_key_window();
+        }
+    }
+}
+
+#[tauri::command]
+fn set_panel_expanded(
+    expanded: bool,
+    state: tauri::State<'_, AppWindow>,
+    expanded_state: tauri::State<'_, PanelExpanded>,
+) -> Result<(), String> {
+    let mut guard = expanded_state.0.lock().unwrap();
+    if *guard == expanded {
+        return Ok(());
+    }
+
+    if let Some(ref window) = *state.0.lock().unwrap() {
+        set_window_panel_mode(window, expanded).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "macos")]
+        make_panel_float_on_top(window);
+    }
+
+    *guard = expanded;
+    Ok(())
+}
+
+#[tauri::command]
+fn focus_water_reminder(
+    state: tauri::State<'_, AppWindow>,
+    expanded_state: tauri::State<'_, PanelExpanded>,
+    restore_state: tauri::State<'_, WaterRestoreState>,
+) -> Result<(), String> {
+    if let Some(ref window) = *state.0.lock().unwrap() {
+        let mut restore = restore_state.0.lock().unwrap();
+        if restore.is_none() {
+            let pomodoro_expanded = *expanded_state.0.lock().unwrap();
+            let position = window.outer_position().map_err(|e| e.to_string())?;
+            let size = window.outer_size().map_err(|e| e.to_string())?;
+            *restore = Some(WindowSnapshot {
+                position,
+                size,
+                pomodoro_expanded,
+            });
+        }
+
+        window
+            .set_size(Size::Logical(LogicalSize::new(WATER_SIZE, WATER_SIZE)))
+            .map_err(|e| e.to_string())?;
+        center_window(window);
+        let _ = window.show();
+
+        #[cfg(target_os = "macos")]
+        make_panel_float_on_top(window);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn restore_water_reminder(
+    state: tauri::State<'_, AppWindow>,
+    expanded_state: tauri::State<'_, PanelExpanded>,
+    restore_state: tauri::State<'_, WaterRestoreState>,
+) -> Result<(), String> {
+    let snapshot = restore_state.0.lock().unwrap().take();
+    if let (Some(snapshot), Some(ref window)) = (snapshot, state.0.lock().unwrap().as_ref()) {
+        window
+            .set_size(Size::Physical(snapshot.size))
+            .map_err(|e| e.to_string())?;
+        window
+            .set_position(Position::Physical(snapshot.position))
+            .map_err(|e| e.to_string())?;
+        *expanded_state.0.lock().unwrap() = snapshot.pomodoro_expanded;
+
+        #[cfg(target_os = "macos")]
+        make_panel_float_on_top(window);
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_nspanel::init())
+        .manage(AppWindow(Mutex::new(None)))
+        .manage(PanelExpanded(Mutex::new(false)))
+        .manage(WaterRestoreState(Mutex::new(None)))
+        .manage(AlwaysOnTop(Mutex::new(true)))
+        .manage(TrayPinItem(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![
+            keep_on_top,
+            show_context_menu,
+            make_panel_key,
+            set_panel_expanded,
+            focus_water_reminder,
+            restore_water_reminder
+        ])
+        .on_menu_event(menu_event_handler)
         .setup(|app| {
-            // macOS: 设为 Accessory 应用，不显示在 Dock / 任务栏
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            // 配置窗口行为
             if let Some(window) = app.get_webview_window("main") {
-                // 让小猫脱离台前调度、浮在所有桌面、全屏可见
-                #[cfg(target_os = "macos")]
-                make_window_float_on_all_spaces(&window);
+                app.state::<AppWindow>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .replace(window.clone());
 
-                // 将窗口居中显示，方便第一眼看到
-                if let Ok(Some(monitor)) = window.primary_monitor() {
-                    let size = window.outer_size().unwrap_or_default();
-                    let x = monitor.position().x
-                        + (monitor.size().width - size.width) as i32 / 2;
-                    let y = monitor.position().y
-                        + (monitor.size().height - size.height) as i32 / 2;
-                    let _ = window.set_position(tauri::Position::Physical(
-                        tauri::PhysicalPosition::new(x, y),
-                    ));
+                #[cfg(target_os = "macos")]
+                make_panel_float_on_top(&window);
+
+                #[cfg(target_os = "macos")]
+                if let Ok(panel) = window.to_panel::<BasicPanel>() {
+                    panel.show_and_make_key();
                 }
+
+                #[cfg(target_os = "macos")]
+                start_refresh_loop(app.handle().clone());
+
+                center_window(&window);
+                let _ = window.show();
+                let _ = window.set_focus();
             }
 
-            // 全局键盘监听：keytap 可以监听到应用窗口之外的所有按键。
+            let (tray_menu, pin_item) = build_tray_menu(app.handle())?;
+            app.state::<TrayPinItem>()
+                .0
+                .lock()
+                .unwrap()
+                .replace(pin_item);
+            TrayIconBuilder::with_id("main-tray")
+                .icon(app.default_window_icon().cloned().expect("no window icon"))
+                .icon_as_template(true)
+                .tooltip(format!("像素猫 v{}", APP_VERSION))
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(menu_event_handler)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            #[cfg(target_os = "macos")]
+                            make_panel_float_on_top(&window);
+                        }
+                    }
+                })
+                .build(app)?;
+
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                if let Ok(tap) = Tap::new() {
-                    for event in tap.iter() {
-                        if let EventKind::KeyDown(_) = event.kind {
-                            let _ = handle.emit("typing", ());
+                match Tap::new() {
+                    Ok(tap) => {
+                        for event in tap.iter() {
+                            if let EventKind::KeyDown(_) = event.kind {
+                                let _ = handle.emit("typing", ());
+                            }
                         }
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "Failed to start global keyboard listener. Check macOS Accessibility permission: {err}"
+                        );
+                        // Do not open System Settings from the listener thread. On some macOS
+                        // versions that re-entrant launch can terminate the panel process before
+                        // the pet window becomes visible. The tray/context menu remains usable,
+                        // and the permission can be granted manually for this stable app id.
+                        let _ = handle.emit(
+                            "show-toast",
+                            "需要在系统设置里允许辅助功能/输入监控，授权后请重启像素猫",
+                        );
                     }
                 }
             });
