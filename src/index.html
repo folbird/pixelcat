@@ -131,6 +131,31 @@
       opacity: 0.48;
     }
 
+    /* 番茄钟计数 */
+    #pomodoro-count {
+      position: fixed;
+      top: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 2px 8px;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.85);
+      text-align: center;
+      background: rgba(30, 30, 30, 0.6);
+      border-radius: 6px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease;
+      box-sizing: border-box;
+      white-space: nowrap;
+      z-index: 79;
+    }
+    body.pomodoro-active #pomodoro-count {
+      opacity: 1;
+    }
+
     #sleep-z {
       position: fixed;
       top: 8px;
@@ -157,13 +182,130 @@
       0%, 100% { transform: translate(0, 3px) scale(0.9); }
       50% { transform: translate(4px, -2px) scale(1.08); }
     }
+
+    /* 宠物名字展示 */
+    #pet-name {
+      position: fixed;
+      bottom: 2px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: 116px;
+      padding: 1px 6px;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      color: #fff;
+      text-align: center;
+      background: rgba(30, 30, 30, 0.72);
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-sizing: border-box;
+      z-index: 78;
+    }
+    #pet-name.show {
+      opacity: 1;
+    }
+
+    /* 名字输入弹窗 */
+    #name-dialog {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(20, 20, 20, 0.55);
+      z-index: 200;
+    }
+    #name-dialog.open {
+      display: flex;
+    }
+    #name-dialog .dialog-box {
+      max-width: 220px;
+      padding: 12px 14px;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      background: rgba(38, 38, 38, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      text-align: center;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+    }
+    #name-dialog .dialog-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      margin: 0 0 8px;
+    }
+    #name-dialog input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 5px 8px;
+      font-size: 13px;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 7px;
+      outline: none;
+      text-align: center;
+    }
+    #name-dialog input:focus {
+      border-color: rgba(255, 255, 255, 0.55);
+    }
+    #name-dialog .dialog-buttons {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    #name-dialog button {
+      padding: 4px 14px;
+      font-size: 12px;
+      font-family: -apple-system, "PingFang SC", sans-serif;
+      font-weight: 600;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    #name-dialog button:hover {
+      background: rgba(255, 255, 255, 0.26);
+    }
+    #name-dialog button.primary {
+      background: rgba(80, 130, 255, 0.55);
+      border-color: rgba(80, 130, 255, 0.8);
+    }
+    #name-dialog button.primary:hover {
+      background: rgba(80, 130, 255, 0.75);
+    }
   </style>
 </head>
 <body>
   <div id="pomodoro-display">25:00</div>
+  <div id="pomodoro-count"></div>
   <canvas id="pet"></canvas>
   <div id="sleep-z" aria-hidden="true">Z</div>
+  <div id="pet-name"></div>
   <div id="toast"></div>
+
+  <!-- 名字输入弹窗 -->
+  <div id="name-dialog">
+    <div class="dialog-box">
+      <p class="dialog-title">给小猫起个名字吧</p>
+      <input id="name-input" type="text" maxlength="10" placeholder="输入名字" autocomplete="off" />
+      <div class="dialog-buttons">
+        <button id="name-cancel">取消</button>
+        <button id="name-ok" class="primary">确认</button>
+      </div>
+    </div>
+  </div>
 
   <script src="./main.js"></script>
 </body>

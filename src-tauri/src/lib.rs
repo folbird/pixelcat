@@ -24,11 +24,18 @@ struct AlwaysOnTop(Mutex<bool>);
 /// Tray 菜单里 id="pin" 的勾选项引用，便于勾选状态同步。
 struct TrayPinItem(Mutex<Option<CheckMenuItem<tauri::Wry>>>);
 
+/// 开机自启开关状态。
+struct StartupEnabled(Mutex<bool>);
+
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PET_SIZE: f64 = 128.0;
 const POMODORO_WIDTH: f64 = 128.0;
 const POMODORO_HEIGHT: f64 = 160.0;
 const WATER_SIZE: f64 = 256.0;
+
+// macOS LaunchAgent 文件名：com.jun.desktop-pet.plist
+const LAUNCH_AGENT_LABEL: &str = "com.jun.desktop-pet";
+const LAUNCH_AGENT_FILENAME: &str = "com.jun.desktop-pet.plist";
 
 #[derive(Clone, Copy)]
 struct WindowSnapshot {
@@ -132,6 +139,99 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
     });
 }
 
+// ============================================================
+// 开机自启（macOS LaunchAgent）
+// ============================================================
+
+#[cfg(target_os = "macos")]
+fn launch_agent_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home)
+        .join("Library")
+        .join("LaunchAgents")
+        .join(LAUNCH_AGENT_FILENAME)
+}
+
+#[cfg(target_os = "macos")]
+fn current_exe_path() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn write_launch_agent(enabled: bool) -> std::io::Result<()> {
+    let plist_path = launch_agent_path();
+    let dir = plist_path.parent().unwrap();
+    std::fs::create_dir_all(dir)?;
+
+    if !enabled {
+        if plist_path.exists() {
+            std::fs::remove_file(&plist_path)?;
+        }
+        // 清理 launchctl 注册
+        let _ = std::process::Command::new("launchctl")
+            .args(["remove", LAUNCH_AGENT_LABEL])
+            .output();
+        return Ok(());
+    }
+
+    let exe = current_exe_path();
+    if exe.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "cannot resolve current executable path",
+        ));
+    }
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+"#,
+        label = LAUNCH_AGENT_LABEL,
+        exe = exe
+    );
+
+    std::fs::write(&plist_path, plist)?;
+
+    // 注册到 launchctl
+    let _ = std::process::Command::new("launchctl")
+        .args(["load", plist_path.to_str().unwrap_or_default()])
+        .output();
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn startup_enabled() -> bool {
+    launch_agent_path().exists()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn startup_enabled() -> bool {
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_launch_agent(_enabled: bool) -> std::io::Result<()> {
+    Ok(())
+}
+
+fn set_startup(enabled: bool) -> Result<(), String> {
+    write_launch_agent(enabled).map_err(|e| format!("设置开机自启失败: {e}"))
+}
+
 fn center_window(window: &WebviewWindow) {
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let size = window.outer_size().unwrap_or_default();
@@ -170,10 +270,6 @@ fn set_window_panel_mode(window: &WebviewWindow, expanded: bool) -> tauri::Resul
 // 菜单
 // ============================================================
 
-fn emit_todo(app: &tauri::AppHandle, name: &str) {
-    let _ = app.emit("show-toast", format!("🚧 「{}」功能敬请期待", name));
-}
-
 fn emit_water_reminder(app: &tauri::AppHandle) {
     let _ = app.emit("water-reminder-now", ());
 }
@@ -184,7 +280,9 @@ fn build_settings_submenu(
     let pin_checked = *app.state::<AlwaysOnTop>().0.lock().unwrap();
     let pin_item = CheckMenuItem::with_id(app, "pin", "窗口置顶", true, pin_checked, None::<&str>)?;
     let center_item = MenuItem::with_id(app, "center", "回到屏幕中央", true, None::<&str>)?;
-    let startup_item = MenuItem::with_id(app, "todo_startup", "开机自启", true, None::<&str>)?;
+    let startup_checked = *app.state::<StartupEnabled>().0.lock().unwrap();
+    let startup_item =
+        CheckMenuItem::with_id(app, "todo_startup", "开机自启", true, startup_checked, None::<&str>)?;
     tauri::menu::Submenu::with_items(app, "设置", true, &[&pin_item, &center_item, &startup_item])
 }
 
@@ -320,9 +418,35 @@ fn menu_event_handler(app: &tauri::AppHandle, event: MenuEvent) {
             let _ = app.emit("open-pomodoro", ());
         }
         "water_reminder" => emit_water_reminder(app),
-        "todo_stretch" => emit_todo(app, "休息拉伸"),
-        "todo_name" => emit_todo(app, "告诉我名字"),
-        "todo_startup" => emit_todo(app, "开机自启"),
+        "todo_stretch" => {
+            let _ = app.emit("stretch-reminder-now", ());
+        }
+        "todo_name" => {
+            let _ = app.emit("open-name-dialog", ());
+        }
+        "todo_startup" => {
+            let enabled = {
+                let state = app.state::<StartupEnabled>();
+                let mut guard = state.0.lock().unwrap();
+                *guard = !*guard;
+                *guard
+            };
+            match set_startup(enabled) {
+                Ok(()) => {
+                    let _ = app.emit(
+                        "show-toast",
+                        if enabled { "已开启开机自启" } else { "已关闭开机自启" },
+                    );
+                }
+                Err(e) => {
+                    // 失败时回滚勾选状态
+                    let state = app.state::<StartupEnabled>();
+                    let mut guard = state.0.lock().unwrap();
+                    *guard = !enabled;
+                    let _ = app.emit("show-toast", e);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -439,6 +563,7 @@ pub fn run() {
         .manage(WaterRestoreState(Mutex::new(None)))
         .manage(AlwaysOnTop(Mutex::new(true)))
         .manage(TrayPinItem(Mutex::new(None)))
+        .manage(StartupEnabled(Mutex::new(startup_enabled())))
         .invoke_handler(tauri::generate_handler![
             keep_on_top,
             show_context_menu,

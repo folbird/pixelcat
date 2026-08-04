@@ -1,5 +1,5 @@
 // ============================================================
-// Desktop Pet 动画逻辑 + 番茄钟
+// Desktop Pet 动画逻辑 + 番茄钟 + 喝水提醒 + 名字 + 休息拉伸
 // ============================================================
 
 // ---- 打字帧 ----
@@ -10,6 +10,7 @@ const WATER_REMINDER_INTERVAL = 45 * 60 * 1000;
 const WATER_REMINDER_VISIBLE_MS = 8000;
 const TYPING_VISIBLE_MS = 360;
 const SLEEP_AFTER_IDLE_MS = 30 * 1000;
+const STRETCH_INTERVAL = 60 * 60 * 1000; // 每小时提醒一次休息拉伸
 
 const canvas = document.getElementById('pet');
 canvas.width = FRAME_W * SCALE;
@@ -183,6 +184,85 @@ frames.forEach((frame) => {
 drawIdleFrame();
 
 // ============================================================
+// 宠物名字（localStorage 持久化）
+// ============================================================
+const PET_NAME_KEY = 'pixelcat.pet.name';
+const petNameEl = document.getElementById('pet-name');
+const nameDialog = document.getElementById('name-dialog');
+const nameInput = document.getElementById('name-input');
+const nameOkBtn = document.getElementById('name-ok');
+const nameCancelBtn = document.getElementById('name-cancel');
+
+function getPetName() {
+  try {
+    return localStorage.getItem(PET_NAME_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setPetName(name) {
+  const trimmed = (name || '').trim().slice(0, 10);
+  try {
+    if (trimmed) localStorage.setItem(PET_NAME_KEY, trimmed);
+    else localStorage.removeItem(PET_NAME_KEY);
+  } catch {
+    // localStorage 不可用时仅内存生效
+  }
+  updatePetNameDisplay(trimmed);
+}
+
+function updatePetNameDisplay(name) {
+  if (!petNameEl) return;
+  if (name) {
+    petNameEl.textContent = name;
+    petNameEl.classList.add('show');
+  } else {
+    petNameEl.textContent = '';
+    petNameEl.classList.remove('show');
+  }
+}
+
+function openNameDialog() {
+  if (!nameDialog || !nameInput) return;
+  nameInput.value = getPetName();
+  nameDialog.classList.add('open');
+  nameInput.focus();
+  nameInput.select();
+}
+
+function closeNameDialog() {
+  if (!nameDialog) return;
+  nameDialog.classList.remove('open');
+}
+
+function confirmName() {
+  const name = nameInput.value;
+  if (!name.trim()) {
+    showToast('名字不能为空哦');
+    return;
+  }
+  setPetName(name);
+  closeNameDialog();
+  showToast(`好的，以后叫你 ${name.trim()} 🐱`);
+}
+
+if (nameDialog && nameOkBtn && nameCancelBtn) {
+  nameOkBtn.addEventListener('click', confirmName);
+  nameCancelBtn.addEventListener('click', closeNameDialog);
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') confirmName();
+    if (e.key === 'Escape') closeNameDialog();
+  });
+  nameDialog.addEventListener('click', (e) => {
+    if (e.target === nameDialog) closeNameDialog();
+  });
+}
+
+// 初始化名字显示（网页加载 / Tauri 每次启动时）
+updatePetNameDisplay(getPetName());
+
+// ============================================================
 // 喝水提醒
 // ============================================================
 let waterReminderTimer = null;
@@ -214,18 +294,56 @@ function startWaterReminder() {
 }
 
 // ============================================================
+// 休息拉伸提醒
+// ============================================================
+let stretchTimer = null;
+
+function showStretchReminder() {
+  showToast('🧘 起来拉伸一下吧！久坐容易疲劳');
+  advanceOneFrame();
+  setPetState('typing');
+  clearTimeout(typingStateTimer);
+  typingStateTimer = setTimeout(() => {
+    if (petState === 'typing') setPetState('idle');
+  }, TYPING_VISIBLE_MS);
+}
+
+function startStretchReminder() {
+  if (stretchTimer) clearInterval(stretchTimer);
+  stretchTimer = setInterval(showStretchReminder, STRETCH_INTERVAL);
+}
+
+// ============================================================
 // 番茄钟
 // ============================================================
 const POMODORO_WORK = 25 * 60;
 const POMODORO_BREAK = 5 * 60;
+const POMODORO_COUNT_KEY = 'pixelcat.pomodoro.total';
 
 let pomodoroState = 'idle';   // idle | work | break | paused
 let pomodoroPausedFrom = 'work';
 let pomodoroRemaining = POMODORO_WORK;
 let pomodoroTimer = null;
-let pomodoroTotalWork = 0;
+let pomodoroTotalWork = loadPomodoroCount();
 
 const display = document.getElementById('pomodoro-display');
+const countEl = document.getElementById('pomodoro-count');
+
+function loadPomodoroCount() {
+  try {
+    return parseInt(localStorage.getItem(POMODORO_COUNT_KEY) || '0', 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function savePomodoroCount() {
+  try {
+    localStorage.setItem(POMODORO_COUNT_KEY, String(pomodoroTotalWork));
+  } catch {
+    // localStorage 不可用时仅内存生效
+  }
+}
 
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60);
@@ -237,6 +355,9 @@ function updateDisplay() {
   display.textContent = formatTime(pomodoroRemaining);
   document.body.classList.toggle('pomodoro-active', pomodoroState !== 'idle');
   document.body.classList.toggle('pomodoro-paused', pomodoroState === 'paused');
+  if (countEl) {
+    countEl.textContent = `🍅 × ${pomodoroTotalWork}`;
+  }
 }
 
 function tick() {
@@ -247,6 +368,7 @@ function tick() {
   if (pomodoroRemaining <= 0) {
     if (pomodoroState === 'work') {
       pomodoroTotalWork++;
+      savePomodoroCount();
       showToast(`🍅 番茄完成！休息 5 分钟`);
       advanceOneFrame();
       pomodoroState = 'break';
@@ -298,6 +420,7 @@ function resetPomodoro() {
   pomodoroPausedFrom = 'work';
   pomodoroRemaining = POMODORO_WORK;
   pomodoroTotalWork = 0;
+  savePomodoroCount();
   updateDisplay();
   setPanelExpanded(false);
 }
@@ -340,12 +463,12 @@ function init() {
   if (T && T.event && T.event.listen) {
     T.event.listen('show-toast', (event) => showToast(event.payload));
     T.event.listen('water-reminder-now', () => showWaterReminder());
-  }
-
-  // 番茄钟
-  if (T && T.event && T.event.listen) {
+    T.event.listen('stretch-reminder-now', () => showStretchReminder());
     T.event.listen('open-pomodoro', () => {
       togglePomodoro();
+    });
+    T.event.listen('open-name-dialog', () => {
+      openNameDialog();
     });
   }
 
@@ -360,6 +483,7 @@ function init() {
   scheduleBlink();
   setInterval(updateIdleState, 250);
   startWaterReminder();
+  startStretchReminder();
 }
 
 if (document.readyState === 'loading') {
