@@ -14,18 +14,30 @@
     }
     #pet {
       position: fixed;
-      top: 0;
+      top: 50%;
       left: 50%;
-      transform: translateX(-50%);
+      /* canvas 尺寸永远固定 128×128，不随窗口变化（WKWebView 是独立进程渲染，
+         resize→布局有延迟，尺寸跟随窗口会造成错位）。放大用 GPU 合成器
+         transform: scale(2)（不触发布局、即时生效、中心恒等），
+         + transition 0.3s 实现平滑变大。 */
       width: 128px;
       height: 128px;
+      transform: translate(-50%, -50%);
+      transition: transform 0.3s ease-out;
       image-rendering: pixelated;
       cursor: grab;
-      transition: top 0.18s ease, width 0.18s ease, height 0.18s ease;
-      transform-origin: center bottom;
+      transform-origin: center center;
     }
     #pet:active {
       cursor: grabbing;
+    }
+
+    /* 喝水提醒放大态：猫平滑放大到 256×256（scale(2)，2 倍整数缩放像素锐利），
+       中心保持在窗口中央 = 屏幕中央。放大期间暂停呼吸/眨眼等 transform 动画，
+       避免与 scale 冲突。 */
+    body.water-active #pet {
+      animation: none !important;
+      transform: translate(-50%, -50%) scale(2);
     }
 
     /* 待机时模拟参考项目里的呼吸、眨眼和睡觉状态。 */
@@ -47,40 +59,33 @@
     }
 
     @keyframes idle-breathe {
-      0%, 100% { transform: translateX(-50%) translateY(0) scaleY(1); }
-      50% { transform: translateX(-50%) translateY(-1px) scaleY(1.015); }
+      0%, 100% { transform: translate(-50%, -50%) translateY(0) scaleY(1); }
+      50% { transform: translate(-50%, -50%) translateY(-1px) scaleY(1.015); }
     }
 
     @keyframes idle-blink {
-      0%, 100% { transform: translateX(-50%) scaleY(1); }
-      45%, 65% { transform: translateX(-50%) scaleY(0.86); }
+      0%, 100% { transform: translate(-50%, -50%) scaleY(1); }
+      45%, 65% { transform: translate(-50%, -50%) scaleY(0.86); }
     }
 
     @keyframes sleep-breathe {
-      0%, 100% { transform: translateX(-50%) translateY(1px) scaleY(0.96); }
-      50% { transform: translateX(-50%) translateY(2px) scaleY(0.985); }
+      0%, 100% { transform: translate(-50%, -50%) translateY(1px) scaleY(0.96); }
+      50% { transform: translate(-50%, -50%) translateY(2px) scaleY(0.985); }
     }
 
     @keyframes typing-hop {
-      0% { transform: translateX(-50%) translateY(0); }
-      50% { transform: translateX(-50%) translateY(-2px); }
-      100% { transform: translateX(-50%) translateY(0); }
+      0% { transform: translate(-50%, -50%) translateY(0); }
+      50% { transform: translate(-50%, -50%) translateY(-2px); }
+      100% { transform: translate(-50%, -50%) translateY(0); }
     }
 
-    body.pomodoro-active #pet {
-      top: 32px;
-    }
-
-    body.water-active #pet {
-      top: 0;
-      width: 256px;
-      height: 256px;
-    }
-
-    /* Toast */
+    /* Toast：固定在窗口顶部。猫固定 128×128 并居中，喝水提醒放大到 256×340 时
+       猫头顶约在 y=106，toast 占 8~38px，间距充足不重叠；平时 128×128 窗口
+       猫居中占满窗口（头顶约 0px），toast 位于窗口顶部，正常场景 toast 会盖在
+       猫上方，但喝水提醒的 toast 只在放大态显示，与猫始终保持间距。 */
     #toast {
       position: fixed;
-      top: 8px;
+      top: 6px;
       left: 50%;
       transform: translateX(-50%) translateY(-4px);
       max-width: 236px;
@@ -88,7 +93,7 @@
       font-size: 12px;
       font-family: -apple-system, "PingFang SC", sans-serif;
       color: #fff;
-      background: rgba(40, 40, 40, 0.88);
+      background: rgba(0, 0, 0, 0.2);
       border-radius: 8px;
       text-align: center;
       line-height: 1.35;
@@ -104,24 +109,25 @@
 
     #pomodoro-display {
       position: fixed;
-      top: 4px;
+      top: 8px;
       left: 50%;
-      transform: translateX(-50%);
-      min-width: 72px;
-      padding: 3px 8px;
+      transform: translateX(calc(-50% - 4px));
+      /* 水平严格居中，时间显示在猫正上方，无偏移。 */
+      padding: 4px 12px;
       font-family: -apple-system, "PingFang SC", sans-serif;
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
-      color: #fff;
+      color: #333;
       text-align: center;
       letter-spacing: 0;
-      background: rgba(30, 30, 30, 0.78);
+      background: transparent;
       border-radius: 8px;
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.18s ease;
       box-sizing: border-box;
+      white-space: nowrap;
       z-index: 80;
     }
     body.pomodoro-active #pomodoro-display {
@@ -131,29 +137,51 @@
       opacity: 0.48;
     }
 
-    /* 番茄钟计数 */
-    #pomodoro-count {
+    /* 番茄钟控制按钮：暂停/继续 + 取消，仅在番茄钟活动或暂停时显示。
+       窗口放大态高 190px：时间在顶部 4~24px，猫垂直居中（占 31~159px），
+       两个按钮水平居中紧凑排列在猫下方（top 163~185px），间隙 4px。 */
+    .pomodoro-btn {
       position: fixed;
-      top: 30px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 2px 8px;
+      top: 163px;
+      width: 24px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
       font-family: -apple-system, "PingFang SC", sans-serif;
-      font-size: 10px;
-      font-weight: 600;
-      color: rgba(255, 255, 255, 0.85);
-      text-align: center;
-      background: rgba(30, 30, 30, 0.6);
-      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1;
+      color: #333;
+      background: rgba(255, 255, 255, 0.75);
+      border: 1px solid rgba(0, 0, 0, 0.18);
+      border-radius: 7px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      cursor: pointer;
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.18s ease;
+      transition: opacity 0.18s ease, background 0.15s ease;
+      z-index: 85;
       box-sizing: border-box;
-      white-space: nowrap;
-      z-index: 79;
     }
-    body.pomodoro-active #pomodoro-count {
+    body.pomodoro-active .pomodoro-btn,
+    body.pomodoro-paused .pomodoro-btn {
       opacity: 1;
+      pointer-events: auto;
+    }
+    .pomodoro-btn:hover {
+      background: rgba(255, 255, 255, 0.97);
+    }
+    .pomodoro-btn:active {
+      background: rgba(255, 255, 255, 0.85);
+    }
+    #pomodoro-pause-btn {
+      left: 50%;
+      transform: translateX(calc(-50% - 14px));
+    }
+    #pomodoro-cancel-btn {
+      left: 50%;
+      transform: translateX(calc(-50% + 14px));
     }
 
     #sleep-z {
@@ -181,35 +209,6 @@
     @keyframes sleep-z {
       0%, 100% { transform: translate(0, 3px) scale(0.9); }
       50% { transform: translate(4px, -2px) scale(1.08); }
-    }
-
-    /* 宠物名字展示 */
-    #pet-name {
-      position: fixed;
-      bottom: 2px;
-      left: 50%;
-      transform: translateX(-50%);
-      max-width: 116px;
-      padding: 1px 6px;
-      font-family: -apple-system, "PingFang SC", sans-serif;
-      font-size: 10px;
-      font-weight: 600;
-      color: #fff;
-      text-align: center;
-      background: rgba(30, 30, 30, 0.72);
-      border-radius: 6px;
-      letter-spacing: 0.5px;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      box-sizing: border-box;
-      z-index: 78;
-    }
-    #pet-name.show {
-      opacity: 1;
     }
 
     /* 名字输入弹窗 */
@@ -289,16 +288,16 @@
 </head>
 <body>
   <div id="pomodoro-display">25:00</div>
-  <div id="pomodoro-count"></div>
+  <button id="pomodoro-pause-btn" class="pomodoro-btn" title="暂停/继续" aria-label="暂停/继续">⏸</button>
+  <button id="pomodoro-cancel-btn" class="pomodoro-btn" title="取消" aria-label="取消">✕</button>
   <canvas id="pet"></canvas>
   <div id="sleep-z" aria-hidden="true">Z</div>
-  <div id="pet-name"></div>
   <div id="toast"></div>
 
   <!-- 名字输入弹窗 -->
   <div id="name-dialog">
     <div class="dialog-box">
-      <p class="dialog-title">给小猫起个名字吧</p>
+      <p class="dialog-title">输入你的名字</p>
       <input id="name-input" type="text" maxlength="10" placeholder="输入名字" autocomplete="off" />
       <div class="dialog-buttons">
         <button id="name-cancel">取消</button>

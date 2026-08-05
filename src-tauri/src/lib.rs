@@ -10,7 +10,7 @@ use tauri::menu::CheckMenuItem;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow,
+    Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, WebviewWindow,
 };
 use tauri_nspanel::{tauri_panel, PanelLevel, StyleMask, WebviewWindowExt};
 
@@ -30,8 +30,12 @@ struct StartupEnabled(Mutex<bool>);
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PET_SIZE: f64 = 128.0;
 const POMODORO_WIDTH: f64 = 128.0;
-const POMODORO_HEIGHT: f64 = 160.0;
-const WATER_SIZE: f64 = 256.0;
+// 番茄钟窗口高度：顶部 24px 留时间(4~24px)，中间 128px 猫垂直居中(31~159px)，
+// 底部 31px 给暂停/取消按钮(163~185px)。
+const POMODORO_HEIGHT: f64 = 190.0;
+// 喝水提醒放大尺寸：上方加高为文字提醒留空间（猫仍居中，toast 显示在猫头顶上方）。
+const WATER_WIDTH: f64 = 256.0;
+const WATER_HEIGHT: f64 = 340.0;
 
 // macOS LaunchAgent 文件名：com.jun.desktop-pet.plist
 const LAUNCH_AGENT_LABEL: &str = "com.jun.desktop-pet";
@@ -39,8 +43,13 @@ const LAUNCH_AGENT_FILENAME: &str = "com.jun.desktop-pet.plist";
 
 #[derive(Clone, Copy)]
 struct WindowSnapshot {
-    position: PhysicalPosition<i32>,
-    size: PhysicalSize<u32>,
+    // 放大前窗口左上角坐标（NSWindow frame 的 origin，点单位），恢复时平滑回到原位。
+    origin_x: f64,
+    origin_y: f64,
+    // 放大前窗口尺寸（点单位）。可能是常态 128×128 或番茄钟扩展 128×150。
+    width: f64,
+    height: f64,
+    // 放大前是否处于番茄钟扩展模式，恢复时还原界面状态。
     pomodoro_expanded: bool,
 }
 
@@ -240,6 +249,106 @@ fn center_window(window: &WebviewWindow) {
         let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
             x, y,
         )));
+    }
+}
+
+/// 读取当前窗口 frame：返回 (origin_x, origin_y, width, height)，单位点。
+#[cfg(target_os = "macos")]
+fn current_frame(window: &tauri::WebviewWindow) -> (f64, f64, f64, f64) {
+    use objc2::msg_send;
+    use objc2::runtime::NSObject;
+    use objc2_foundation::NSRect;
+
+    if let Ok(ptr) = window.ns_window() {
+        let ns_window: *mut NSObject = ptr as *mut NSObject;
+        if !ns_window.is_null() {
+            unsafe {
+                let frame: NSRect = msg_send![ns_window, frame];
+                return (frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+            }
+        }
+    }
+    (0.0, 0.0, PET_SIZE, PET_SIZE)
+}
+
+/// 以 (cx, cy) 为中心、w×h 尺寸，用原生 `setFrame:display:` 原子设置窗口 frame。
+/// 单帧原子生效，配合逐帧插值即可得到平滑动画。
+#[cfg(target_os = "macos")]
+fn set_frame_centered(window: &tauri::WebviewWindow, cx: f64, cy: f64, w: f64, h: f64) {
+    use objc2::msg_send;
+    use objc2::runtime::NSObject;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    if let Ok(ptr) = window.ns_window() {
+        let ns_window: *mut NSObject = ptr as *mut NSObject;
+        if ns_window.is_null() {
+            return;
+        }
+        unsafe {
+            let new_rect = NSRect {
+                origin: NSPoint::new(cx - w / 2.0, cy - h / 2.0),
+                size: NSSize { width: w, height: h },
+            };
+            let _: () = msg_send![ns_window, setFrame: new_rect, display: true];
+        }
+    }
+}
+
+/// 当前窗口主显示器屏幕中心（点单位）。
+#[cfg(target_os = "macos")]
+fn screen_center_point(window: &tauri::WebviewWindow) -> (f64, f64) {
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let cx = (monitor.position().x as f64 + monitor.size().width as f64 / 2.0) / scale;
+        let cy = (monitor.position().y as f64 + monitor.size().height as f64 / 2.0) / scale;
+        (cx, cy)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+/// 逐帧平滑动画：从 (start_cx, start_cy, start_w, start_h) 用 ease-out 插值到
+/// (target_cx, target_cy, target_w, target_h)，每 16ms 一帧、共 25 帧（约 0.4s）。
+///
+/// 必须在后台线程调用（本函数内部会 sleep 阻塞），每帧通过 run_on_main_thread
+/// 设置 frame。动画在函数返回前完成 → JS invoke resolve 即代表动画结束。
+#[cfg(target_os = "macos")]
+fn animate_zoom(
+    app: &tauri::AppHandle,
+    start_cx: f64,
+    start_cy: f64,
+    start_w: f64,
+    start_h: f64,
+    target_cx: f64,
+    target_cy: f64,
+    target_w: f64,
+    target_h: f64,
+) {
+    const FRAME_MS: u64 = 16;
+    const FRAMES: u64 = 25;
+
+    for i in 1..=FRAMES {
+        let t = i as f64 / FRAMES as f64;
+        // ease-out cubic：先快后慢，贴近 macOS 原生手感。
+        let e = 1.0 - (1.0 - t).powi(3);
+        let cx = start_cx + (target_cx - start_cx) * e;
+        let cy = start_cy + (target_cy - start_cy) * e;
+        let w = start_w + (target_w - start_w) * e;
+        let h = start_h + (target_h - start_h) * e;
+
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = app.run_on_main_thread(move || {
+                set_frame_centered(&window, cx, cy, w, h);
+            });
+        }
+        std::thread::sleep(Duration::from_millis(FRAME_MS));
+    }
+
+    // 最后一帧精确到位，避免时序误差。
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = app.run_on_main_thread(move || {
+            set_frame_centered(&window, target_cx, target_cy, target_w, target_h);
+        });
     }
 }
 
@@ -501,28 +610,42 @@ fn set_panel_expanded(
 
 #[tauri::command]
 fn focus_water_reminder(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppWindow>,
     expanded_state: tauri::State<'_, PanelExpanded>,
     restore_state: tauri::State<'_, WaterRestoreState>,
 ) -> Result<(), String> {
+    // 非 macOS 下 app 参数不被使用。
+    let _ = &app;
+
     if let Some(ref window) = *state.0.lock().unwrap() {
         let mut restore = restore_state.0.lock().unwrap();
-        if restore.is_none() {
-            let pomodoro_expanded = *expanded_state.0.lock().unwrap();
-            let position = window.outer_position().map_err(|e| e.to_string())?;
-            let size = window.outer_size().map_err(|e| e.to_string())?;
+        if restore.is_some() {
+            // 动画进行中，忽略重复触发。
+            return Ok(());
+        }
+        let pomodoro_expanded = *expanded_state.0.lock().unwrap();
+
+        #[cfg(target_os = "macos")]
+        {
+            // 记录当前原位和尺寸，恢复时平滑回到此处。
+            let (ox, oy, w, h) = current_frame(window);
             *restore = Some(WindowSnapshot {
-                position,
-                size,
+                origin_x: ox,
+                origin_y: oy,
+                width: w,
+                height: h,
                 pomodoro_expanded,
             });
-        }
 
-        window
-            .set_size(Size::Logical(LogicalSize::new(WATER_SIZE, WATER_SIZE)))
-            .map_err(|e| e.to_string())?;
-        center_window(window);
-        let _ = window.show();
+            let _ = window.show();
+
+            // 从当前位置逐帧平滑动画到「主显示器屏幕中央 + 256×340（上方留文字空间）」。
+            // animate_zoom 同步阻塞直至动画完成 → invoke resolve 即代表窗口已就位。
+            let (scx, scy) = (ox + w / 2.0, oy + h / 2.0);
+            let (tgx, tgy) = screen_center_point(window);
+            animate_zoom(&app, scx, scy, w, h, tgx, tgy, WATER_WIDTH, WATER_HEIGHT);
+        }
 
         #[cfg(target_os = "macos")]
         make_panel_float_on_top(window);
@@ -533,18 +656,37 @@ fn focus_water_reminder(
 
 #[tauri::command]
 fn restore_water_reminder(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppWindow>,
     expanded_state: tauri::State<'_, PanelExpanded>,
     restore_state: tauri::State<'_, WaterRestoreState>,
 ) -> Result<(), String> {
+    // 非 macOS 下 app 参数不被使用。
+    let _ = &app;
+
     let snapshot = restore_state.0.lock().unwrap().take();
-    if let (Some(snapshot), Some(ref window)) = (snapshot, state.0.lock().unwrap().as_ref()) {
-        window
-            .set_size(Size::Physical(snapshot.size))
-            .map_err(|e| e.to_string())?;
-        window
-            .set_position(Position::Physical(snapshot.position))
-            .map_err(|e| e.to_string())?;
+    if let (Some(ref window), Some(snapshot)) = (state.0.lock().unwrap().as_ref(), snapshot) {
+        #[cfg(target_os = "macos")]
+        {
+            // 从当前（屏幕中央 256×340）逐帧平滑动画回到原位尺寸/坐标。
+            let (ox, oy, w, h) = current_frame(window);
+            let (scx, scy) = (ox + w / 2.0, oy + h / 2.0);
+            let (tx, ty) = (
+                snapshot.origin_x + snapshot.width / 2.0,
+                snapshot.origin_y + snapshot.height / 2.0,
+            );
+            animate_zoom(
+                &app,
+                scx,
+                scy,
+                w,
+                h,
+                tx,
+                ty,
+                snapshot.width,
+                snapshot.height,
+            );
+        }
         *expanded_state.0.lock().unwrap() = snapshot.pomodoro_expanded;
 
         #[cfg(target_os = "macos")]
