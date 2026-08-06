@@ -4,25 +4,39 @@
   <meta charset="utf-8" />
   <title>Desktop Pet</title>
   <style>
+    /* Ark Pixel 像素字体（支持简体中文）：放入 src/assets/ 后自动加载生效。
+       未放入时回退到等宽字体（不影响功能）。 */
+    @font-face {
+      font-family: "ArkPixel12";
+      src: url("./assets/ark-pixel-12px-proportional-latin.ttf") format("truetype");
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "ArkPixel12CN";
+      src: url("./assets/ark-pixel-12px-proportional-zh_cn.ttf") format("truetype");
+      font-display: swap;
+    }
+    .font-pixel {
+      font-family: "ArkPixel12CN", "ArkPixel12", "Monaco", "Menlo", "Courier New", monospace;
+    }
     html, body {
       margin: 0;
       padding: 0;
-      background: transparent;
+      background: rgba(0, 128, 255, 0.35);
       overflow: hidden;
       width: 100%;
       height: 100%;
     }
     #pet {
       position: fixed;
-      top: 50%;
+      top: 96px;
       left: 50%;
-      /* canvas 尺寸永远固定 128×128，不随窗口变化（WKWebView 是独立进程渲染，
-         resize→布局有延迟，尺寸跟随窗口会造成错位）。放大用 GPU 合成器
-         transform: scale(2)（不触发布局、即时生效、中心恒等），
-         + transition 0.3s 实现平滑变大。 */
+      /* 窗口固定 260×305、永不移动：猫固定在 96~224px（水平居中），
+         顶部 0~96px 为气泡区，猫下方 224~305px 为倒计时/按钮/输入框区。
+         canvas 尺寸永远固定 128×128；窗口不 resize。 */
       width: 128px;
       height: 128px;
-      transform: translate(-50%, -50%);
+      transform: translate(-50%, 0);
       transition: transform 0.3s ease-out;
       image-rendering: pixelated;
       cursor: grab;
@@ -30,14 +44,6 @@
     }
     #pet:active {
       cursor: grabbing;
-    }
-
-    /* 喝水提醒放大态：猫平滑放大到 256×256（scale(2)，2 倍整数缩放像素锐利），
-       中心保持在窗口中央 = 屏幕中央。放大期间暂停呼吸/眨眼等 transform 动画，
-       避免与 scale 冲突。 */
-    body.water-active #pet {
-      animation: none !important;
-      transform: translate(-50%, -50%) scale(2);
     }
 
     /* 待机时模拟参考项目里的呼吸、眨眼和睡觉状态。 */
@@ -59,66 +65,92 @@
     }
 
     @keyframes idle-breathe {
-      0%, 100% { transform: translate(-50%, -50%) translateY(0) scaleY(1); }
-      50% { transform: translate(-50%, -50%) translateY(-1px) scaleY(1.015); }
+      0%, 100% { transform: translate(-50%, 0) translateY(0) scaleY(1); }
+      50% { transform: translate(-50%, 0) translateY(-1px) scaleY(1.015); }
     }
 
     @keyframes idle-blink {
-      0%, 100% { transform: translate(-50%, -50%) scaleY(1); }
-      45%, 65% { transform: translate(-50%, -50%) scaleY(0.86); }
+      0%, 100% { transform: translate(-50%, 0) scaleY(1); }
+      45%, 65% { transform: translate(-50%, 0) scaleY(0.86); }
     }
 
     @keyframes sleep-breathe {
-      0%, 100% { transform: translate(-50%, -50%) translateY(1px) scaleY(0.96); }
-      50% { transform: translate(-50%, -50%) translateY(2px) scaleY(0.985); }
+      0%, 100% { transform: translate(-50%, 0) translateY(1px) scaleY(0.96); }
+      50% { transform: translate(-50%, 0) translateY(2px) scaleY(0.985); }
     }
 
     @keyframes typing-hop {
-      0% { transform: translate(-50%, -50%) translateY(0); }
-      50% { transform: translate(-50%, -50%) translateY(-2px); }
-      100% { transform: translate(-50%, -50%) translateY(0); }
+      0% { transform: translate(-50%, 0) translateY(0); }
+      50% { transform: translate(-50%, 0) translateY(-2px); }
+      100% { transform: translate(-50%, 0) translateY(0); }
     }
 
-    /* Toast：固定在窗口顶部。猫固定 128×128 并居中，喝水提醒放大到 256×340 时
-       猫头顶约在 y=106，toast 占 8~38px，间距充足不重叠；平时 128×128 窗口
-       猫居中占满窗口（头顶约 0px），toast 位于窗口顶部，正常场景 toast 会盖在
-       猫上方，但喝水提醒的 toast 只在放大态显示，与猫始终保持间距。 */
+    /* Toast 提醒气泡：红底白字像素字体，带硬投影（像素感）。
+       固定在小猫正上方（窗口 0~96px 气泡区），气泡尖朝下指向小猫。
+       窗口固定 300×340 不移动，气泡始终在猫正上方，永不遮挡猫身。 */
+    /* 红底白字提醒气泡（喝水/休息拉伸/番茄钟提示共用）：
+       基础位置 top:22px（较默认 6px 下调 16px）；番茄钟激活时 top:54px（再下调 32px）。 */
     #toast {
       position: fixed;
-      top: 6px;
+      top: 22px;
       left: 50%;
       transform: translateX(-50%) translateY(-4px);
-      max-width: 236px;
-      padding: 6px 12px;
+      max-width: 260px;
+      padding: 6px 12px 5px;
       font-size: 12px;
-      font-family: -apple-system, "PingFang SC", sans-serif;
+      line-height: 1.4;
+      font-family: "ArkPixel12CN", "ArkPixel12", "Monaco", "Menlo", "Courier New", monospace;
+      font-weight: 700;
+      letter-spacing: 0.5px;
       color: #fff;
-      background: rgba(0, 0, 0, 0.2);
-      border-radius: 8px;
+      background: #e63946;
+      border: 2px solid #b91c2c;
+      border-radius: 6px;
       text-align: center;
-      line-height: 1.35;
+      box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.55);
       pointer-events: none;
       opacity: 0;
       transition: opacity 0.25s ease, transform 0.25s ease;
       z-index: 99;
+    }
+    #toast::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -6px;
+      border: 6px solid transparent;
+      border-top-color: #e63946;
     }
     #toast.show {
       opacity: 1;
       transform: translateX(-50%) translateY(0);
     }
 
+    /* 番茄钟激活时：气泡较普通状态再下调 32px（含暂停/取消/继续等字样）。 */
+    body.pomodoro-active #toast {
+      top: 54px;
+    }
+
+    /* 「番茄钟已取消」提示：取消后 body 不再 pomodoro-active，
+       普通态 22px 基础上再下移 20px → 42px。 */
+    #toast.toast-extra-down {
+      top: 42px;
+    }
+
     #pomodoro-display {
       position: fixed;
-      top: 8px;
+      /* 窗口固定 260×305：猫在 96~224px，倒计时显示在猫正下方（235~259px）。 */
+      top: 225px;
       left: 50%;
-      transform: translateX(calc(-50% - 4px));
-      /* 水平严格居中，时间显示在猫正上方，无偏移。 */
-      padding: 4px 12px;
-      font-family: -apple-system, "PingFang SC", sans-serif;
-      font-size: 15px;
+      transform: translateX(calc(-50% + 0px));
+      /* 水平居中基础上右移 1px。 */
+      padding: 2px 10px;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      font-size: 13px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
-      color: #333;
+      color: #333;  
       text-align: center;
       letter-spacing: 0;
       background: transparent;
@@ -138,18 +170,18 @@
     }
 
     /* 番茄钟控制按钮：暂停/继续 + 取消，仅在番茄钟活动或暂停时显示。
-       窗口放大态高 190px：时间在顶部 4~24px，猫垂直居中（占 31~159px），
-       两个按钮水平居中紧凑排列在猫下方（top 163~185px），间隙 4px。 */
+       窗口固定 260×305：猫(96~224px)，倒计时(235~259px)，
+       两个按钮水平居中紧凑排列在倒计时下方（top 260~282px），间隙 4px。 */
     .pomodoro-btn {
       position: fixed;
-      top: 163px;
+      top: 255px;
       width: 24px;
       height: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 0;
-      font-family: -apple-system, "PingFang SC", sans-serif;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       font-size: 11px;
       line-height: 1;
       color: #333;
@@ -186,8 +218,9 @@
 
     #sleep-z {
       position: fixed;
-      top: 8px;
-      right: 4px;
+      /* 小猫右上角：上沿 92px（猫头顶 96px 上方 4px）、右沿 66px（猫右缘对齐 66px）。 */
+      top: 92px;
+      right: 66px;
       color: #4f78c8;
       font-family: -apple-system, "PingFang SC", sans-serif;
       font-size: 18px;
@@ -211,78 +244,66 @@
       50% { transform: translate(4px, -2px) scale(1.08); }
     }
 
-    /* 名字输入弹窗 */
+    /* 名字输入弹窗：水平布局输入控件，无任何黑色遮罩背景。
+       窗口固定 260×305：猫(96~224px)，输入框 258px 宽固定在猫正下方（238~290px）水平居中，
+       底部到窗口下沿 15px。 */
     #name-dialog {
       position: fixed;
-      inset: 0;
+      top: 238px;
+      left: 50%;
+      transform: translateX(-50%);
       display: none;
       align-items: center;
-      justify-content: center;
-      background: rgba(20, 20, 20, 0.55);
+      gap: 6px;
+      padding: 6px;
+      background: #fff;
+      border: 3px solid #2B2B2B; /* 深灰黑色粗边框 */
+      border-radius: 14px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       z-index: 200;
     }
     #name-dialog.open {
       display: flex;
     }
-    #name-dialog .dialog-box {
-      max-width: 220px;
-      padding: 12px 14px;
-      font-family: -apple-system, "PingFang SC", sans-serif;
-      background: rgba(38, 38, 38, 0.95);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 12px;
-      text-align: center;
-      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
-    }
-    #name-dialog .dialog-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: #fff;
-      margin: 0 0 8px;
-    }
     #name-dialog input {
-      width: 100%;
+      width: 160px;
       box-sizing: border-box;
-      padding: 5px 8px;
-      font-size: 13px;
-      font-family: -apple-system, "PingFang SC", sans-serif;
-      color: #fff;
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.24);
-      border-radius: 7px;
+      padding: 6px 10px;
+      font-size: 14px;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      color: #333;
+      background: transparent;
+      border: none;
       outline: none;
-      text-align: center;
-    }
-    #name-dialog input:focus {
-      border-color: rgba(255, 255, 255, 0.55);
+      caret-color: #333; /* 黑色文本光标 */
     }
     #name-dialog .dialog-buttons {
-      margin-top: 10px;
       display: flex;
-      gap: 8px;
-      justify-content: center;
+      gap: 6px;
     }
     #name-dialog button {
-      padding: 4px 14px;
-      font-size: 12px;
-      font-family: -apple-system, "PingFang SC", sans-serif;
-      font-weight: 600;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      font-size: 13px;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      font-weight: 700;
       color: #fff;
-      background: rgba(255, 255, 255, 0.14);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 7px;
+      background: #111; /* 黑色方形按钮 */
+      border: none;
+      border-radius: 6px;
       cursor: pointer;
-      transition: background 0.15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease, transform 0.1s ease;
     }
     #name-dialog button:hover {
-      background: rgba(255, 255, 255, 0.26);
+      background: #333;
     }
-    #name-dialog button.primary {
-      background: rgba(80, 130, 255, 0.55);
-      border-color: rgba(80, 130, 255, 0.8);
-    }
-    #name-dialog button.primary:hover {
-      background: rgba(80, 130, 255, 0.75);
+    #name-dialog button:active {
+      transform: scale(0.94);
     }
   </style>
 </head>
@@ -294,15 +315,12 @@
   <div id="sleep-z" aria-hidden="true">Z</div>
   <div id="toast"></div>
 
-  <!-- 名字输入弹窗 -->
+  <!-- 名字输入弹窗：窗口顶边不动向下扩大，输入框固定在猫正下方 -->
   <div id="name-dialog">
-    <div class="dialog-box">
-      <p class="dialog-title">输入你的名字</p>
-      <input id="name-input" type="text" maxlength="10" placeholder="输入名字" autocomplete="off" />
-      <div class="dialog-buttons">
-        <button id="name-cancel">取消</button>
-        <button id="name-ok" class="primary">确认</button>
-      </div>
+    <input id="name-input" type="text" maxlength="10" placeholder="输入名字" autocomplete="off" />
+    <div class="dialog-buttons">
+      <button id="name-ok" class="primary">OK</button>
+      <button id="name-cancel">×</button>
     </div>
   </div>
 

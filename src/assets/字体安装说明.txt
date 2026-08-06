@@ -1,0 +1,18 @@
+【Mojangles 像素字体安装说明】
+
+本应用已内置 @font-face 支持，会优先加载 src/assets/Mojangles.ttf。
+字体存在并成功加载后，界面文字（气泡、按钮、输入框等）会自动变成 Mojangles 像素字体。
+
+安装步骤：
+1. 下载 Mojangles.ttf 字体文件
+   推荐来源（任选其一）：
+   - 搜索 "Mojangles ttf download"
+   - PlanethCraft 上 Mojangles 资源包内通常附带 ttf
+   - 各类 Minecraft 字体合集包
+2. 把下载的字体文件重命名为 Mojangles.ttf
+3. 放入本目录：src/assets/Mojangles.ttf
+4. 重新运行应用（npm run dev:signed）
+
+注意：
+- 字体只支持 ASCII 字符；中文会被系统自动回退到等宽字体。
+- 若没有放入 Mojangles.ttf，程序不会报错，会回退到系统等宽字体。

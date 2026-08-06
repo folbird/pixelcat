@@ -13,15 +13,17 @@ const SLEEP_AFTER_IDLE_MS = 30 * 1000;
 const STRETCH_INTERVAL = 60 * 60 * 1000; // 每小时提醒一次休息拉伸
 
 // ---- 打字红温系统（Heat System）----
-// 每次按键给猫加热度；不打字时热度按秒衰减。打字越密集热度越高，
-// Canvas 后处理用 source-atop 只在猫身像素上叠加红色，随热度平滑加深。
-const HEAT_PER_KEY = 8;       // 每次按键增加的热度
-const HEAT_DECAY_PER_SEC = 50; // 每秒自然冷却的热度（满热度 100 → 约 2 秒恢复黑色）
-const HEAT_MAX = 100;         // 热度上限（满热度=完全红温）
+// 只有打字速率超过阈值（每秒 >6 次敲击）才触发红温：
+// 慢速正常打字无论打多久都不红，连续高速输入才红，
+// 且红色强度随速率提升平滑加深。
+const HEAT_RATE_THRESHOLD = 6;    // 每秒 6 次敲击才触发红温
+const HEAT_RATE_WINDOW_MS = 1000; // 统计最近 1 秒内的敲击次数
+const HEAT_RATE_MAX = 9;          // 达到每秒 9 键时红色最浓（满红温）
+const HEAT_MAX = 100;             // 红温强度上限（满=完全红温）
 // 满热度时红色叠加的最大不透明度（source-atop 只作用于猫身像素，透明区不受影响）
 const HEAT_MAX_ALPHA = 0.55;
-let petHeat = 0;              // 当前热度 0~100
-let lastHeatTickTime = Date.now(); // 热度衰减计时
+let petHeat = 0;                  // 当前红温强度 0~100（由敲击速率映射）
+let keyTimes = [];                // 最近敲击时间戳（滑动窗口统计速率）
 
 // 眼睛保护区（canvas 128×128 坐标）：红色滤镜不染眼白与瞳孔，外围黑毛要吃到红。
 // 打字帧(press-left/right.svg，viewBox -2~48，缩放 128/50=2.56，偏移 +2×2.56=+5.12)：
@@ -219,8 +221,14 @@ function updateIdleState() {
 
 function handleTyping() {
   lastActivityAt = Date.now();
-  // 打字给猫加热度——打字越快越密集，热度累计越高。
-  petHeat = Math.min(HEAT_MAX, petHeat + HEAT_PER_KEY);
+  // 记录本次敲击时间戳（滑动窗口统计当前打字速率）。
+  const now = Date.now();
+  keyTimes.push(now);
+  // 只保留最近 1 秒内的敲击，统计出「每秒敲击次数」。
+  while (keyTimes.length > 0 && now - keyTimes[0] > HEAT_RATE_WINDOW_MS) {
+    keyTimes.shift();
+  }
+  updateHeat();
   advanceOneFrame();
   setPetState('typing');
   clearTimeout(typingStateTimer);
@@ -230,17 +238,27 @@ function handleTyping() {
 }
 
 // ---- 打字红温实现 ----
-// 热度冷却。每秒调用（实际按帧时间差精确衰减）。
+// 由滑动窗口打字速率计算红温强度：速率 ≤ 阈值 → 0（完全不红）；
+// 速率达到 HEAT_RATE_MAX → 100（满红温）；之间线性渐变。
 function updateHeat() {
   const now = Date.now();
-  const dt = Math.min(0.5, (now - lastHeatTickTime) / 1000); // 防切后台卡顿瞬间猛掉
-  lastHeatTickTime = now;
-  if (petHeat > 0) {
-    petHeat = Math.max(0, petHeat - HEAT_DECAY_PER_SEC * dt);
+  // 清理窗口外的旧敲击记录。
+  while (keyTimes.length > 0 && now - keyTimes[0] > HEAT_RATE_WINDOW_MS) {
+    keyTimes.shift();
+  }
+  const rate = keyTimes.length; // 最近 1 秒内的敲击次数 = 每秒速率
+  if (rate <= HEAT_RATE_THRESHOLD) {
+    petHeat = 0;
+  } else {
+    petHeat = Math.min(
+      HEAT_MAX,
+      ((rate - HEAT_RATE_THRESHOLD) / (HEAT_RATE_MAX - HEAT_RATE_THRESHOLD)) * HEAT_MAX
+    );
   }
 }
 
-// 把当前热度映射到画面后处理：仅猫身像素叠加红色，眼睛（眼白+瞳孔）保持原色。
+// 把当前红温强度映射到画面后处理：仅猫身像素叠加红色，眼睛（眼白+瞳孔）保持原色。
+// 速率 ≤ 阈值时 petHeat=0 完全不渲染；超过后红色从 0 平滑渐显，满强度达到 HEAT_MAX_ALPHA。
 function applyHeatEffects() {
   if (petHeat <= 0) return;
   const alpha = (petHeat / HEAT_MAX) * HEAT_MAX_ALPHA;
@@ -336,13 +354,18 @@ function handleCursorPosition(event) {
 }
 
 // ---- Toast ----
-function showToast(msg) {
+// extraDown：为某些提示额外下移（如「番茄钟已取消」再下调 20px）。
+function showToast(msg, extraDown) {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = msg;
+  el.classList.toggle('toast-extra-down', !!extraDown);
   el.classList.add('show');
   clearTimeout(el._timer);
-  el._timer = setTimeout(() => el.classList.remove('show'), 2500);
+  el._timer = setTimeout(() => {
+    el.classList.remove('show');
+    el.classList.remove('toast-extra-down');
+  }, 2500);
 }
 
 frames.forEach((frame) => {
@@ -380,6 +403,7 @@ function setPetName(name) {
   return trimmed;
 }
 
+// 打开名字弹窗：窗口固定 300×340 永不移动，输入框直接在猫正下方显示。
 function openNameDialog() {
   if (!nameDialog || !nameInput) return;
   nameInput.value = getPetName();
@@ -388,6 +412,7 @@ function openNameDialog() {
   nameInput.select();
 }
 
+// 关闭名字弹窗：直接隐藏（窗口从不移动）。
 function closeNameDialog() {
   if (!nameDialog) return;
   nameDialog.classList.remove('open');
@@ -430,23 +455,16 @@ function invoke(command, args) {
   return Promise.resolve();
 }
 
-async function showWaterReminder() {
-  // 1) Rust 侧 animate_zoom 同步逐帧动画（约 0.4s）：窗口从当前位置平滑移动到
-  //    屏幕中央并放大到 256×340（上沿留文字空间）。canvas 固定 128×128 居中跟随。
-  await invoke('focus_water_reminder');
-  // 2) 窗口已就位，再加 class → 猫用 GPU transform: scale(2) 平滑放大到 256×256，
-  //    中心不变、像素锐利、绝不与窗口错位。
+function showWaterReminder() {
+  // 窗口固定 300×340 永不移动：猫在窗口内从 128 平滑放大到 256×256（scale(2)），
+  // 顶部 96px 气泡区 + 窗口 340px 足够容纳放大后的猫，气泡仍显示在猫头顶上方。
   document.body.classList.add('water-active');
   const name = getPetName();
   showToast(name ? `${name}，该喝水啦，起来接一杯水吧` : '该喝水啦，起来接一杯水吧');
   advanceOneFrame();
   clearTimeout(waterReminderRestoreTimer);
-  waterReminderRestoreTimer = setTimeout(async () => {
-    // 1) 先移除 class → 猫 GPU 缩回 128（窗口仍是 256×340，无裁剪）。
+  waterReminderRestoreTimer = setTimeout(() => {
     document.body.classList.remove('water-active');
-    // 2) 等猫缩回动画（0.3s）结束后，窗口再从屏幕中央平滑归位。
-    await new Promise((r) => setTimeout(r, 320));
-    await invoke('restore_water_reminder');
   }, WATER_REMINDER_VISIBLE_MS);
 }
 
@@ -586,7 +604,7 @@ function cancelPomodoro() {
   pomodoroRemaining = POMODORO_WORK;
   updateDisplay();
   setPanelExpanded(false);
-  showToast('番茄钟已取消');
+  showToast('番茄钟已取消', true);
 }
 
 function togglePomodoro() {

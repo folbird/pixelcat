@@ -29,13 +29,12 @@ struct StartupEnabled(Mutex<bool>);
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PET_SIZE: f64 = 128.0;
-const POMODORO_WIDTH: f64 = 128.0;
-// 番茄钟窗口高度：顶部 24px 留时间(4~24px)，中间 128px 猫垂直居中(31~159px)，
-// 底部 31px 给暂停/取消按钮(163~185px)。
-const POMODORO_HEIGHT: f64 = 190.0;
-// 喝水提醒放大尺寸：上方加高为文字提醒留空间（猫仍居中，toast 显示在猫头顶上方）。
-const WATER_WIDTH: f64 = 256.0;
-const WATER_HEIGHT: f64 = 340.0;
+// 窗口固定尺寸 260×305：启动后永不 resize/移动（避免 WKWebView 重排导致猫闪烁）。
+// 宽度 = 名字输入框 258px 左右各多 1px；高度 = 金色输入框底部 290px + 15px 间距。
+// 布局：顶部 0~96px 气泡区；猫固定在 96~224px（水平居中）；
+// 猫下方 224~305px 为番茄钟倒计时/按钮、名字输入框区域。
+const WINDOW_WIDTH: f64 = 260.0;
+const WINDOW_HEIGHT: f64 = 305.0;
 
 // macOS LaunchAgent 文件名：com.jun.desktop-pet.plist
 const LAUNCH_AGENT_LABEL: &str = "com.jun.desktop-pet";
@@ -268,7 +267,7 @@ fn current_frame(window: &tauri::WebviewWindow) -> (f64, f64, f64, f64) {
             }
         }
     }
-    (0.0, 0.0, PET_SIZE, PET_SIZE)
+    (0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT)
 }
 
 /// 以 (cx, cy) 为中心、w×h 尺寸，用原生 `setFrame:display:` 原子设置窗口 frame。
@@ -352,26 +351,8 @@ fn animate_zoom(
     }
 }
 
-fn set_window_panel_mode(window: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
-    let target_width = if expanded { POMODORO_WIDTH } else { PET_SIZE };
-    let target_height = if expanded { POMODORO_HEIGHT } else { PET_SIZE };
-    let position = window.outer_position().ok();
-    let current_size = window.outer_size().ok();
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let target_physical_width = (target_width * scale).round() as i32;
-    let target_physical_height = (target_height * scale).round() as i32;
-
-    window.set_size(Size::Logical(LogicalSize::new(target_width, target_height)))?;
-
-    if let (Some(position), Some(current_size)) = (position, current_size) {
-        let dx = (target_physical_width - current_size.width as i32) / 2;
-        let dy = (target_physical_height - current_size.height as i32) / 2;
-        let _ = window.set_position(Position::Physical(PhysicalPosition::new(
-            position.x - dx,
-            position.y - dy,
-        )));
-    }
-
+// 窗口固定尺寸，永不 resize。函数保留仅作占位（旧调用残留），实际不做任何改动。
+fn set_window_panel_mode(_window: &WebviewWindow, _expanded: bool) -> tauri::Result<()> {
     Ok(())
 }
 
@@ -608,91 +589,27 @@ fn set_panel_expanded(
     Ok(())
 }
 
+// 窗口固定、永不动：喝水提醒只是在窗口内显示 UI，无需移动窗口。
 #[tauri::command]
-fn focus_water_reminder(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppWindow>,
-    expanded_state: tauri::State<'_, PanelExpanded>,
-    restore_state: tauri::State<'_, WaterRestoreState>,
-) -> Result<(), String> {
-    // 非 macOS 下 app 参数不被使用。
-    let _ = &app;
-
-    if let Some(ref window) = *state.0.lock().unwrap() {
-        let mut restore = restore_state.0.lock().unwrap();
-        if restore.is_some() {
-            // 动画进行中，忽略重复触发。
-            return Ok(());
-        }
-        let pomodoro_expanded = *expanded_state.0.lock().unwrap();
-
-        #[cfg(target_os = "macos")]
-        {
-            // 记录当前原位和尺寸，恢复时平滑回到此处。
-            let (ox, oy, w, h) = current_frame(window);
-            *restore = Some(WindowSnapshot {
-                origin_x: ox,
-                origin_y: oy,
-                width: w,
-                height: h,
-                pomodoro_expanded,
-            });
-
-            let _ = window.show();
-
-            // 从当前位置逐帧平滑动画到「主显示器屏幕中央 + 256×340（上方留文字空间）」。
-            // animate_zoom 同步阻塞直至动画完成 → invoke resolve 即代表窗口已就位。
-            let (scx, scy) = (ox + w / 2.0, oy + h / 2.0);
-            let (tgx, tgy) = screen_center_point(window);
-            animate_zoom(&app, scx, scy, w, h, tgx, tgy, WATER_WIDTH, WATER_HEIGHT);
-        }
-
-        #[cfg(target_os = "macos")]
-        make_panel_float_on_top(window);
-    }
-
+fn focus_water_reminder(_app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// 窗口固定、永不动：名字弹窗只是显示/隐藏，无需移动窗口。
 #[tauri::command]
-fn restore_water_reminder(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppWindow>,
-    expanded_state: tauri::State<'_, PanelExpanded>,
-    restore_state: tauri::State<'_, WaterRestoreState>,
-) -> Result<(), String> {
-    // 非 macOS 下 app 参数不被使用。
-    let _ = &app;
+fn focus_name_dialog(_app: tauri::AppHandle) -> Result<(), String> {
+    Ok(())
+}
 
-    let snapshot = restore_state.0.lock().unwrap().take();
-    if let (Some(ref window), Some(snapshot)) = (state.0.lock().unwrap().as_ref(), snapshot) {
-        #[cfg(target_os = "macos")]
-        {
-            // 从当前（屏幕中央 256×340）逐帧平滑动画回到原位尺寸/坐标。
-            let (ox, oy, w, h) = current_frame(window);
-            let (scx, scy) = (ox + w / 2.0, oy + h / 2.0);
-            let (tx, ty) = (
-                snapshot.origin_x + snapshot.width / 2.0,
-                snapshot.origin_y + snapshot.height / 2.0,
-            );
-            animate_zoom(
-                &app,
-                scx,
-                scy,
-                w,
-                h,
-                tx,
-                ty,
-                snapshot.width,
-                snapshot.height,
-            );
-        }
-        *expanded_state.0.lock().unwrap() = snapshot.pomodoro_expanded;
+// 窗口固定、永不动：关闭名字弹窗无窗口动画。
+#[tauri::command]
+fn restore_name_dialog() -> Result<(), String> {
+    Ok(())
+}
 
-        #[cfg(target_os = "macos")]
-        make_panel_float_on_top(window);
-    }
-
+// 窗口固定、永不动：恢复喝水提醒无窗口动画。
+#[tauri::command]
+fn restore_water_reminder() -> Result<(), String> {
     Ok(())
 }
 
@@ -712,7 +629,9 @@ pub fn run() {
             make_panel_key,
             set_panel_expanded,
             focus_water_reminder,
-            restore_water_reminder
+            restore_water_reminder,
+            focus_name_dialog,
+            restore_name_dialog
         ])
         .on_menu_event(menu_event_handler)
         .setup(|app| {
@@ -737,6 +656,8 @@ pub fn run() {
                 #[cfg(target_os = "macos")]
                 start_refresh_loop(app.handle().clone());
 
+                // 初始窗口 = 固定 260×305，启动后永不 resize/移动。
+                let _ = window.set_size(Size::Logical(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)));
                 center_window(&window);
                 let _ = window.show();
                 let _ = window.set_focus();
