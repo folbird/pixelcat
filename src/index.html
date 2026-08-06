@@ -19,6 +19,14 @@
     .font-pixel {
       font-family: "ArkPixel12CN", "ArkPixel12", "Monaco", "Menlo", "Courier New", monospace;
     }
+    :root {
+      /* 果冻弹簧物理参数（可调手感）：
+         刚度越大跟随越快；阻尼越大抖动衰减越快。 */
+      --jelly-stiff: 0.12;
+      --jelly-damp: 0.8;
+      --jelly-max-offset: 40px;  /* 猫在窗口内最大滞后偏移 */
+      --jelly-max-stretch: 0.3;  /* 拖拽最大拉伸 30% */
+    }
     html, body {
       margin: 0;
       padding: 0;
@@ -27,20 +35,38 @@
       width: 100%;
       height: 100%;
     }
-    #pet {
+    /* 果冻拖拽：窗口固定 260×305、永不移动。猫的水平居中定位移到 wrapper，
+       JS 每帧用弹簧物理给 wrapper 设置 transform（滞后偏移+拉伸+旋转）实现果冻，
+       内部 #pet 只保留 idle-breathe/blink/typing 等自身动画。 */
+    #pet-wrapper {
       position: fixed;
       top: 96px;
-      left: 50%;
-      /* 窗口固定 260×305、永不移动：猫固定在 96~224px（水平居中），
-         顶部 0~96px 为气泡区，猫下方 224~305px 为倒计时/按钮/输入框区。
-         canvas 尺寸永远固定 128×128；窗口不 resize。 */
+      /* 水平居中 = 50% - 半宽(64px)。
+         注意：不再用 JS matrix 覆盖（拖拽期间 rAF 会被 macOS 原生拖动循环冻结），
+         拖拽果冻改用 CSS 动画 drag-jelly；松手移除动画后靠弹性 transition 回位。 */
+      left: calc(50% - 64px);
       width: 128px;
       height: 128px;
-      transform: translate(-50%, 0);
-      transition: transform 0.3s ease-out;
+      /* 猫固定在 96~224px（水平居中）由 wrapper 承担；
+         顶部 0~96px 气泡区，猫下方 224~305px 倒计时/按钮/输入框区。 */
+      transform-origin: center center;
+      /* 注意：不能给 wrapper 加 transform transition —— dragLoop 每帧
+         写 inline transform（形变衰减回位是物理阻尼实现的），
+         若再带 transition 会和每帧更新打架导致形变粘滞/回弹异常。 */
+      z-index: 50;
+      pointer-events: none;
+    }
+    /* 拖拽方向感知形变由 JS 每帧写 wrapper 的 transform（手动拖动窗口，
+       不用原生 startDragging，避免 rAF 被冻结），此处只保留松手回位弹性。 */
+    #pet {
+      width: 128px;
+      height: 128px;
       image-rendering: pixelated;
       cursor: grab;
       transform-origin: center center;
+      /* 果冻位移由 JS requestAnimationFrame 驱动 wrapper，不用 CSS transition */
+      transition: none;
+      pointer-events: auto;
     }
     #pet:active {
       cursor: grabbing;
@@ -65,24 +91,38 @@
     }
 
     @keyframes idle-breathe {
-      0%, 100% { transform: translate(-50%, 0) translateY(0) scaleY(1); }
-      50% { transform: translate(-50%, 0) translateY(-1px) scaleY(1.015); }
+      0%, 100% { transform: translateY(0) scaleY(1); }
+      50% { transform: translateY(-1px) scaleY(1.015); }
     }
 
     @keyframes idle-blink {
-      0%, 100% { transform: translate(-50%, 0) scaleY(1); }
-      45%, 65% { transform: translate(-50%, 0) scaleY(0.86); }
+      0%, 100% { transform: scaleY(1); }
+      45%, 65% { transform: scaleY(0.86); }
     }
 
     @keyframes sleep-breathe {
-      0%, 100% { transform: translate(-50%, 0) translateY(1px) scaleY(0.96); }
-      50% { transform: translate(-50%, 0) translateY(2px) scaleY(0.985); }
+      0%, 100% { transform: translateY(1px) scaleY(0.96); }
+      50% { transform: translateY(2px) scaleY(0.985); }
     }
 
-    @keyframes typing-hop {
-      0% { transform: translate(-50%, 0) translateY(0); }
-      50% { transform: translate(-50%, 0) translateY(-2px); }
-      100% { transform: translate(-50%, 0) translateY(0); }
+    /* 左键点击猫时的一次性果冻弹跳（源自掘金「果冻大法」jelly-jump，
+       适配本布局去掉基础 translate，只保留 translateY/scaleX/scaleY/rotate）：
+       先下蹲挤压 → 跳起 → 左右摇摆 → 回弹收缩 → 停。 */
+    @keyframes pet-click-jelly {
+      0% { transform: translateY(0) scale(1) scaleY(1); }
+      10% { transform: translateY(5px) scale(1.2) scaleY(0.8); }
+      30% { transform: translateY(-13px) scale(1) scaleY(1) rotate(5deg); }
+      50% { transform: translateY(0) scale(1) rotate(0); }
+      55% { transform: translateY(0) scaleX(1.1) scaleY(0.9) rotate(0); }
+      70% { transform: translateY(-4px) scaleX(1) scaleY(1) rotate(0); }
+      80% { transform: translateY(0) scaleX(1) scaleY(1) rotate(0); }
+      85% { transform: translateY(0) scaleX(1.05) scaleY(0.95) rotate(0); }
+      100% { transform: translateY(0) scaleX(1) scaleY(1); }
+    }
+    /* 点击弹跳：body #pet.click-jelly 特异性 ≥ body.pet-* #pet（且位于其后），
+       能覆盖待机/眨眼/睡觉/打字的 animation；播完由 JS 移除 class 恢复原状态。 */
+    body #pet.click-jelly {
+      animation: pet-click-jelly 0.9s ease 1;
     }
 
     /* Toast 提醒气泡：红底白字像素字体，带硬投影（像素感）。
@@ -311,7 +351,9 @@
   <div id="pomodoro-display">25:00</div>
   <button id="pomodoro-pause-btn" class="pomodoro-btn" title="暂停/继续" aria-label="暂停/继续">⏸</button>
   <button id="pomodoro-cancel-btn" class="pomodoro-btn" title="取消" aria-label="取消">✕</button>
-  <canvas id="pet"></canvas>
+  <div id="pet-wrapper">
+    <canvas id="pet"></canvas>
+  </div>
   <div id="sleep-z" aria-hidden="true">Z</div>
   <div id="toast"></div>
 

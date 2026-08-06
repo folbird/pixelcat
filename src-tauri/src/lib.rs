@@ -73,6 +73,8 @@ struct CursorPoint {
 extern "C" {
     fn CGEventCreate(source: *const c_void) -> *const c_void;
     fn CGEventGetLocation(event: *const c_void) -> CursorPoint;
+    // 查询鼠标指定按键当前是否按下（stateID=0 组合会话状态，button=0 左键）。
+    fn CGEventSourceButtonState(stateID: u32, button: u32) -> bool;
 }
 
 #[cfg(target_os = "macos")]
@@ -111,12 +113,14 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
         std::thread::sleep(Duration::from_millis(500));
         let mut refresh_counter = 0u8;
         loop {
-            std::thread::sleep(Duration::from_millis(100));
+            // ~60fps（16ms）：果冻拖拽需要平滑的光标速度流。
+            std::thread::sleep(Duration::from_millis(16));
             refresh_counter = refresh_counter.wrapping_add(1);
             let h = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {
                 if let Some(window) = h.get_webview_window("main") {
-                    if refresh_counter % 20 == 0 {
+                    if refresh_counter % 125 == 0 {
+                        // 每 ~2s 重申置顶，防止被其他窗口抢层级。
                         make_panel_float_on_top(&window);
                     }
 
@@ -126,6 +130,10 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
                     }
                     let cursor = unsafe { CGEventGetLocation(event) };
                     unsafe { CFRelease(event) };
+
+                    // 左键按下状态：拖动窗口时 WebView 收不到 pointerup，
+                    // 前端靠这里同步「是否仍在拖拽」。
+                    let left_down = unsafe { CGEventSourceButtonState(0, 0) };
 
                     if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size())
                     {
@@ -137,7 +145,8 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
                                 "x": cursor.x,
                                 "y": cursor.y,
                                 "dx": cursor.x - center_x,
-                                "dy": cursor.y - center_y
+                                "dy": cursor.y - center_y,
+                                "down": left_down
                             }),
                         );
                     }
