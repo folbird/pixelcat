@@ -9,6 +9,21 @@ const SCALE = 1;
 const WATER_REMINDER_INTERVAL = 45 * 60 * 1000;
 const WATER_REMINDER_VISIBLE_MS = 8000;
 const TYPING_VISIBLE_MS = 360;
+// ---- 喝水提醒（轻量优化：智能调度 + 点击打卡 + 进度水色 + 目标庆祝）----
+const WATER_ACTIVE_START_HOUR = 8;     // 活跃提醒时段 08:00 开始
+const WATER_ACTIVE_END_HOUR = 23;      // 23:00 结束（避免深夜打扰）
+const WATER_COOLDOWN_MS = 20 * 60 * 1000; // 刚喝过 20 分钟内不自动打扰
+const WATER_DRINK_ML = 200;            // 每次点击猫 = 喝 200ml
+const WATER_DAILY_GOAL_ML = 2000;      // 每日目标 2000ml
+const WATER_URGENT_MS = 90 * 60 * 1000; // 超过 90 分钟未喝 → 加强提醒
+const WATER_STATE_KEY = 'pixelcat.water';
+// 当日饮水状态（内存缓存 + localStorage 持久化）。声明必须放在文件顶部：
+// drawIdleFrame() 在文件中部顶层调用 → applyHeatEffects() → getWaterTint() 会读取
+// waterState；若声明在后面的喝水区块，此时它处于 TDZ 会抛 ReferenceError，
+// 中断整个脚本导致 init()（拖动/右键/点击/眨眼）全部失效、只剩一只静态猫。
+let waterState = { date: '', drunkML: 0, lastDrinkAt: 0, celebrated: false };
+let waterReminderTimer = null;
+let waterReminderRestoreTimer = null;
 const SLEEP_AFTER_IDLE_MS = 30 * 1000;
 const STRETCH_INTERVAL = 60 * 60 * 1000; // 每小时提醒一次休息拉伸
 
@@ -32,6 +47,16 @@ const BODY_LAG_SMOOTH = 0.12;  // 身体横向滞后平滑（仅拖拽用）
 const BODY_LAG_DAMP = 0.82;    // 身体滞后速度衰减
 const petWrapper = document.getElementById('pet-wrapper');
 const petCanvas = document.getElementById('pet');
+// ---- 音效系统（Web Audio API，Howler.js/Phaser 专业方案）----
+// HTMLAudioElement 的问题：play() 异步 + 同声道竞争，WKWebView 快速连点时会
+// 静默吞掉部分播放 →「有时没声音」。Web Audio 方案：音频解码一次为 AudioBuffer
+// 常驻内存，每次播放新建 BufferSource.start() —— 同步、零延迟、连点多少次响
+// 多少次、永不丢失，且 stop() 可即时掐断（拖动静音）。
+const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+const soundCtx = AudioContextCtor ? new AudioContextCtor() : null;
+const soundBuffers = {};         // 名称 → AudioBuffer（解码后常驻内存）
+const activeSlapSources = [];    // 播放中的 slap source（拖动时掐断用）
+let audioWarmedUp = false;       // 音频是否已预热/解码（只做一次）
 let dragging = false;          // 是否正在拖拽窗口
 let dragWin = null;            // 当前 WebviewWindow
 let dragStartPointerX = 0;     // 按下时鼠标屏幕坐标（CSS 像素）
@@ -48,6 +73,7 @@ let bodyOffsetXV = 0;          // 身体滞后速度
 let stretchUp = 0;             // 向上拉长量（0~MAX，鼠标上移驱动）
 let stretchUpV = 0;            // 向上拉长弹簧速度
 let lastDragTime = Date.now();
+let dragMoved = false;         // 本次按下后是否发生拖动移动（区分点击 vs 拖动，控制音效）
 
 // ---- 打字红温系统（Heat System）----
 // 只有打字速率超过阈值（每秒 >6 次敲击）才触发红温：
@@ -238,13 +264,18 @@ function setPetState(nextState) {
   document.body.classList.toggle('pet-blink', nextState === 'blink');
   document.body.classList.toggle('pet-sleep', nextState === 'sleep');
   document.body.classList.toggle('pet-typing', nextState === 'typing');
+  // 睡觉时循环呼噜声，醒来停止
+  if (nextState === 'sleep') startPurr();
+  else stopPurr();
+  // 喝水/拉伸动画期间：状态照常切换（记录 petState），但不重绘，保持覆盖帧
+  if (isOverlayActive()) return;
   if (nextState !== 'typing') drawIdleFrame();
 }
 
 function scheduleBlink() {
   clearTimeout(blinkTimer);
   blinkTimer = setTimeout(() => {
-    if (petState === 'idle') {
+    if (petState === 'idle' && !isOverlayActive()) {
       setPetState('blink');
       setTimeout(() => {
         if (petState === 'blink') setPetState('idle');
@@ -255,6 +286,7 @@ function scheduleBlink() {
 }
 
 function updateIdleState() {
+  if (isOverlayActive()) return; // 覆盖动画期间保持覆盖帧，不切睡眠
   if (petState === 'typing' || petState === 'blink') return;
   if (Date.now() - lastActivityAt >= SLEEP_AFTER_IDLE_MS) {
     setPetState('sleep');
@@ -273,6 +305,11 @@ function handleTyping() {
     keyTimes.shift();
   }
   updateHeat();
+  // 覆盖动画期间：只记录热度和水色，不覆盖覆盖帧
+  if (isOverlayActive()) {
+    if (petHeat > 0 || getWaterTint() !== null) redrawOverlay();
+    return;
+  }
   advanceOneFrame();
   setPetState('typing');
   clearTimeout(typingStateTimer);
@@ -304,9 +341,9 @@ function updateHeat() {
 // 把当前红温强度映射到画面后处理：仅猫身像素叠加红色，眼睛（眼白+瞳孔）保持原色。
 // 速率 ≤ 阈值时 petHeat=0 完全不渲染；超过后红色从 0 平滑渐显，满强度达到 HEAT_MAX_ALPHA。
 function applyHeatEffects() {
-  if (petHeat <= 0) return;
-  const alpha = (petHeat / HEAT_MAX) * HEAT_MAX_ALPHA;
-  if (alpha <= 0) return;
+  const waterTint = getWaterTint();
+  const heatAlpha = petHeat > 0 ? (petHeat / HEAT_MAX) * HEAT_MAX_ALPHA : 0;
+  if (heatAlpha <= 0 && !waterTint) return;
 
   // 1) 备份当前干净帧（原猫）。
   if (!heatScratchCanvas) {
@@ -318,15 +355,26 @@ function applyHeatEffects() {
   heatScratchCtx.clearRect(0, 0, canvas.width, canvas.height);
   heatScratchCtx.drawImage(canvas, 0, 0);
 
-  // 2) 在猫自身像素上叠加红色：source-atop 把所有不透明区域染色，
-  //    黑色猫身→暗红、白色描边→淡粉，完全透明背景不受影响。
-  ctx.save();
-  ctx.globalCompositeOperation = 'source-atop';
-  ctx.fillStyle = `rgba(235, 50, 35, ${alpha.toFixed(3)})`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.restore();
+  // 2) 先叠加喝水水色（source-atop 只染猫身像素，透明背景不受影响）。
+  //    进度越高越蓝（补水感）；不打字红温时也常驻显示。
+  if (waterTint) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = waterTint.css;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
 
-  // 3) 眼睛保护区：把原猫像素贴回眼睛矩形，红色不染眼白与瞳孔。
+  // 3) 再叠加打字红温（盖在水色之上，红热感仍清晰；两者同显时猫呈红蓝色）。
+  if (heatAlpha > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.fillStyle = `rgba(235, 50, 35, ${heatAlpha.toFixed(3)})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
+
+  // 4) 眼睛保护区：把原猫像素贴回眼睛矩形，水色/红色都不染眼白与瞳孔。
   const rects = petState === 'typing' ? HEAT_EYE_RECTS_TYPING : HEAT_EYE_RECTS_IDLE;
   for (const r of rects) {
     ctx.save();
@@ -343,9 +391,16 @@ function applyHeatEffects() {
 }
 
 // 热度主循环：冷却 + 有热度时重绘当前帧（红色叠加随热度平滑变化）。
+// 同时处理喝水进度水色：有喝水记录时也持续重绘，水色随打卡/跨日实时刷新。
+// 喝水动画播放期间：保持喝水帧（heatLoop 不覆盖喝水帧内容）。
 function heatLoop() {
   updateHeat();
-  if (petHeat > 0) {
+  if (isOverlayActive()) {
+    // 覆盖动画期间：只重绘后处理（红温/水色实时刷新），不重画帧
+    if (petHeat > 0 || getWaterTint() !== null) redrawOverlay();
+    return;
+  }
+  if (petHeat > 0 || getWaterTint() !== null) {
     if (petState === 'typing') drawFrame(frameIndex);
     else drawIdleFrame();
   }
@@ -408,6 +463,11 @@ function handleCursorPosition(event) {
   const followSmooth = (tx === 0 && ty === 0) ? EYE_RETURN_SMOOTH : EYE_FOLLOW_SMOOTH;
   eyeOffsetX += (tx - eyeOffsetX) * followSmooth;
   eyeOffsetY += (ty - eyeOffsetY) * followSmooth;
+  // 覆盖动画期间：不重绘 idle（保持覆盖帧），仅当有红温/水色时刷新后处理
+  if (isOverlayActive()) {
+    if (petHeat > 0 || getWaterTint() !== null) redrawOverlay();
+    return;
+  }
   if (petState !== 'typing') drawIdleFrame();
 }
 
@@ -513,6 +573,304 @@ function dragLoop() {
   requestAnimationFrame(dragLoop);
 }
 
+// fetch + decodeAudioData：把 mp3 解码为 AudioBuffer 常驻内存。
+// 解码完成后 soundBuffers[name] 就绪，此后播放**零延迟、永不丢声**。
+function loadSound(name, url) {
+  if (!soundCtx) return;
+  fetch(url)
+    .then((res) => res.arrayBuffer())
+    .then((data) => decodeIntoBuffer(name, data))
+    .catch(() => { /* 音频加载失败静默忽略 */ });
+}
+
+// 解码 AudioBuffer：兼容 Promise 与回调两种 WKWebView 实现。
+// 关键：检测到 Promise 风格就只用 Promise，否则只走回调，绝不同时执行两遍。
+function decodeIntoBuffer(name, data) {
+  let promise = null;
+  let callbackMode = false;
+  try {
+    promise = soundCtx.decodeAudioData(data);
+  } catch (err) {
+    callbackMode = true;
+  }
+  if (promise && typeof promise.then === 'function') {
+    promise
+      .then((buf) => { soundBuffers[name] = buf; })
+      .catch(() => { /* 解码失败忽略 */ });
+    return;
+  }
+  // 回调风格（旧版本 decodeAudioData 返回 undefined 且需传回调）
+  if (!callbackMode && promise === undefined) {
+    callbackMode = true;
+  }
+  if (callbackMode) {
+    let settled = false;
+    const finish = (buf) => {
+      if (settled) return;
+      settled = true;
+      soundBuffers[name] = buf;
+    };
+    try {
+      soundCtx.decodeAudioData(data, finish, () => { settled = true; });
+    } catch (err) {
+      settled = true;
+    }
+  }
+}
+
+// 循环播放的 source（呼噜声）：单例常驻，睡着循环、醒来即停。
+let purrSource = null;
+const PURR_VOLUME = 0.1; // 呼噜声音量（原声的 1/10，作为背景白噪音）
+function startPurr() {
+  if (!soundCtx || !soundBuffers['purring'] || purrSource) return;
+  // 音量控制：GainNode 把 LoopSource 输出压到 0.1（1/10），
+  // 这样呼噜声是轻柔背景，不盖过其他提示音。
+  const src = soundCtx.createBufferSource();
+  src.buffer = soundBuffers['purring'];
+  src.loop = true;
+  const gain = soundCtx.createGain();
+  gain.gain.value = PURR_VOLUME;
+  src.connect(gain);
+  gain.connect(soundCtx.destination);
+  src.start();
+  purrSource = src;
+}
+function stopPurr() {
+  if (!purrSource) return;
+  try { purrSource.stop(); } catch (err) { /* 已停止则忽略 */ }
+  purrSource = null;
+}
+
+// 播放已解码的 AudioBuffer：每次新建 BufferSource → 连点多少次响多少次，
+// 互不打断、不丢声。限制最大并发 MAX_SOUND_CONCURRENCY：超过时自动
+// 掐断最旧的声音再播新的（防极端连点爆音/内存堆积，同时保证最新一次必响）。
+const MAX_SOUND_CONCURRENCY = 8;
+function playBuffer(name) {
+  if (!soundCtx || !soundBuffers[name]) return false;
+  const src = soundCtx.createBufferSource();
+  src.buffer = soundBuffers[name];
+  src.connect(soundCtx.destination);
+  src.start();
+  return src;
+}
+
+// 播放并登记到并发池：超过上限时掐掉最旧的（保留最新）。
+function playTracked(name) {
+  if (!soundCtx) return null;
+  const src = playBuffer(name);
+  if (!src) return null;
+  activeSlapSources.push(src);
+  while (activeSlapSources.length > MAX_SOUND_CONCURRENCY) {
+    const old = activeSlapSources.shift();
+    try { old.stop(); } catch (err) { /* 已停止则忽略 */ }
+  }
+  return src;
+}
+
+// 播放敲击音效：Web Audio 同步播放，连点多少次响多少次、永不丢失。
+async function playSlap() {
+  if (!soundCtx) return;
+  // 先 await resumeAudio()：首次点击（AudioContext suspended）时等 resume
+  // 完成再 start()，确保第一下也立即出声（避免被 suspended 状态丢弃）。
+  await resumeAudio();
+  const src = playTracked('slap');
+  if (src) {
+    src.onended = () => {
+      const i = activeSlapSources.indexOf(src);
+      if (i >= 0) activeSlapSources.splice(i, 1);
+    };
+  }
+}
+
+// 判定为拖动时立即掐断已播放的音效（按下瞬间已响，拖动开始就静音）。
+function stopSlap() {
+  for (const src of activeSlapSources) {
+    try { src.stop(); } catch (err) { /* 已停止则忽略 */ }
+  }
+  activeSlapSources.length = 0;
+}
+
+// 播放鼠标点击音效：Web Audio 同步播放，跟手零延迟。
+async function playMouseClick() {
+  if (!soundCtx) return;
+  // 先 await resumeAudio()：番茄钟/名字按钮第一下点击（AudioContext suspended）
+  // 时等 resume 完成再 start()，确保第一下立即有声（避免被 suspended 丢弃）。
+  await resumeAudio();
+  playBuffer('mouse-click');
+}
+
+// 预加载+解码音频：页面加载时就调用（decodeAudioData 不依赖用户手势，
+// suspended 状态也可解码）。完成后 soundBuffers 常驻 → **首次点击就出声**，
+// 永不因「首次解码慢」而丢声（这正是之前偶发无音的根因）。
+function initSoundSystem() {
+  if (!soundCtx) return;
+  loadSound('slap', './slap.mp3');
+  loadSound('mouse-click', './mouse-click.mp3');
+  loadSound('meow-alert', './meow-alert.m4a');
+  loadSound('meow', './meow.m4a');
+  loadSound('purring', './purring.m4a');
+}
+
+// ---- 喝水动画（drink-sprite-sheet.png：原版 drinking 动画 36 帧序列帧）----
+// 由 playwright 把 cat-idle-follow-v2.svg 的 drinking CSS 动画逐帧渲染成
+// sprite sheet（9 列 × 4 行，FPS 12，3 秒 36 帧，单帧 257×180，白底已色键转透明）。
+// 喝水提醒/打卡期间按 12fps 播放该序列，展示原版「俯身喝水 + 水碗 + 舌头舔水」。
+const DRINK_SHEET_SRC = './drink-sprite-sheet.png';
+const DRINK_COLS = 9;
+const DRINK_ROWS = 4;
+const DRINK_FRAME_COUNT = 36;
+const DRINK_FPS = 12;
+const DRINK_FRAME_MS = 1000 / DRINK_FPS;
+const drinkSpriteSheet = new Image();
+drinkSpriteSheet.src = DRINK_SHEET_SRC;
+let drinkFrameIndex = 0;   // 当前喝水帧 0~35
+let drinkPhase = null;     // 'animating' 播放中 / null 停
+
+const DRINK_FRAME_W = 277;
+const DRINK_FRAME_H = 191;
+function drawDrinkFrame() {
+  const i = drinkFrameIndex % DRINK_FRAME_COUNT;
+  const sx = (i % DRINK_COLS) * DRINK_FRAME_W;
+  const sy = Math.floor(i / DRINK_COLS) * DRINK_FRAME_H;
+  // 整帧清空后绘制：喝水动画期间 canvas 上只有喝水动画，没有原先小猫
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // 源帧 277×191 → 等比缩放到 128×128 canvas 内（128/277≈0.46，垂直居中，不变形不裁剪）
+  const dh = DRINK_FRAME_H * (canvas.width / DRINK_FRAME_W);
+  const dy = Math.round((canvas.height - dh) / 2);
+  ctx.drawImage(
+    drinkSpriteSheet,
+    sx, sy, DRINK_FRAME_W, DRINK_FRAME_H,
+    0, dy, canvas.width, dh
+  );
+  // 喝水配色与红温共用同一套后处理：进度水色叠加/打字红温不污染眼睛
+  applyHeatEffects();
+}
+
+// 喝水动画帧推进（drinkLoop 计时器）
+function drinkTick() {
+  if (drinkPhase !== 'animating') return;
+  drinkFrameIndex += 1;
+  drawDrinkFrame();
+}
+
+// 开始喝水动画：重置到第 0 帧，启动 12fps 帧推进。
+// sprite sheet 未加载完成时回退到 existing 打字帧（保证不白屏）。
+function startDrinkAnimation() {
+  drinkPhase = 'animating';
+  drinkFrameIndex = 0;
+  if (drinkSpriteSheet.complete && drinkSpriteSheet.naturalWidth > 0) {
+    drawDrinkFrame();
+  } else {
+    // 图片尚在加载：先显示打字帧兜底，加载完成后立即切回喝水帧
+    advanceOneFrame();
+    drinkSpriteSheet.onload = () => {
+      if (drinkPhase === 'animating') drawDrinkFrame();
+    };
+  }
+}
+
+// 停止喝水动画：停表 + 恢复（喝水和拉伸覆盖同时存在时保持另一覆盖帧）。
+function stopDrinkAnimation() {
+  drinkPhase = null;
+  if (stretchPhase !== null) drawStretchFrame();
+  else if (petState === 'typing') drawFrame(frameIndex);
+  else drawIdleFrame();
+}
+
+// ---- 拉伸动画（stretch-sprite-sheet.png：原版 stretch 动画 36 帧序列帧）----
+// 与喝水动画同架构：拉伸提醒期间小猫消失，12fps 播放 36 帧；播完**停在最后一帧**
+// （不循环），保持到提醒窗口结束再由 stopStretchAnimation 恢复小猫。
+const STRETCH_SHEET_SRC = './stretch-sprite-sheet.png';
+const STRETCH_COLS = 9;
+const STRETCH_ROWS = 4;
+const STRETCH_FRAME_COUNT = 36;
+const STRETCH_FPS = 12;
+const STRETCH_FRAME_MS = 1000 / STRETCH_FPS;
+const STRETCH_FRAME_W = 427;
+const STRETCH_FRAME_H = 279;
+const stretchSpriteSheet = new Image();
+stretchSpriteSheet.src = STRETCH_SHEET_SRC;
+let stretchFrameIndex = 0;   // 当前拉伸帧 0~35
+let stretchPhase = null;     // 'animating' 播放中 / 'finished' 停在最后一帧 / null 停
+
+function drawStretchFrame() {
+  const i = stretchFrameIndex % STRETCH_FRAME_COUNT;
+  const sx = (i % STRETCH_COLS) * STRETCH_FRAME_W;
+  const sy = Math.floor(i / STRETCH_COLS) * STRETCH_FRAME_H;
+  // 整帧清空后绘制：拉伸动画期间 canvas 上只有拉伸动画，没有原先小猫
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // 源帧 427×279 → 等比缩放到 128×128 canvas 内（128/427≈0.3，垂直居中，不变形不裁剪）
+  const dh = STRETCH_FRAME_H * (canvas.width / STRETCH_FRAME_W);
+  const dy = Math.round((canvas.height - dh) / 2);
+  ctx.drawImage(
+    stretchSpriteSheet,
+    sx, sy, STRETCH_FRAME_W, STRETCH_FRAME_H,
+    0, dy, canvas.width, dh
+  );
+  applyHeatEffects();
+}
+
+// 拉伸动画帧推进（12fps 由 init 的 setInterval 驱动）：播完停在最后一帧。
+function stretchTick() {
+  if (stretchPhase !== 'animating') return;
+  stretchFrameIndex += 1;
+  if (stretchFrameIndex >= STRETCH_FRAME_COUNT) {
+    stretchPhase = 'finished'; // 停最后一帧，不再推进
+    drawStretchFrame();
+    return;
+  }
+  drawStretchFrame();
+}
+
+// 开始拉伸动画：重置到第 0 帧。sprite 未加载完成时回退打字体兜底。
+function startStretchAnimation() {
+  stretchPhase = 'animating';
+  stretchFrameIndex = 0;
+  if (stretchSpriteSheet.complete && stretchSpriteSheet.naturalWidth > 0) {
+    drawStretchFrame();
+  } else {
+    advanceOneFrame();
+    stretchSpriteSheet.onload = () => {
+      if (stretchPhase !== null) drawStretchFrame();
+    };
+  }
+}
+
+// 停止拉伸动画：恢复原有小猫（喝水覆盖仍存在则保持喝水帧）。
+function stopStretchAnimation() {
+  stretchPhase = null;
+  if (drinkPhase !== null) drawDrinkFrame();
+  else if (petState === 'typing') drawFrame(frameIndex);
+  else drawIdleFrame();
+}
+
+// 喝水/拉伸任一覆盖动画播放中（含拉伸停在最后一帧）→ 其余绘制全部让路。
+function isOverlayActive() {
+  return drinkPhase !== null || stretchPhase !== null;
+}
+
+// 重绘当前覆盖动画帧（喝水优先于拉伸停止逻辑，这里拉伸优先显示前者播完）。
+function redrawOverlay() {
+  if (stretchPhase !== null) drawStretchFrame();
+  else if (drinkPhase !== null) drawDrinkFrame();
+}
+
+// 首次用户交互（pointerdown）时把 AudioContext 从 suspended 切到 running。
+// 只有这一步需要用户手势；解码早已完成，此时播放立即出声。
+function resumeAudio() {
+  if (audioWarmedUp) return Promise.resolve();
+  audioWarmedUp = true;
+  if (!soundCtx || soundCtx.state !== 'suspended') {
+    // 若已经 running（如某次播放已预热）且猫正在睡 → 补循环呼噜
+    if (petState === 'sleep') startPurr();
+    return Promise.resolve();
+  }
+  return soundCtx.resume().then(() => {
+    // 首次交互预热完成：若猫正在睡 → 补循环呼噜
+    if (petState === 'sleep') startPurr();
+  }).catch(() => {});
+}
+
 // ---- Toast ----
 // extraDown：为某些提示额外下移（如「番茄钟已取消」再下调 20px）。
 function showToast(msg, extraDown) {
@@ -590,6 +948,9 @@ function confirmName() {
 }
 
 if (nameDialog && nameOkBtn && nameCancelBtn) {
+  // OK/× 按钮：按下瞬间播放点击音效（pointerdown 提前，跟手同步）
+  nameOkBtn.addEventListener('pointerdown', () => playMouseClick());
+  nameCancelBtn.addEventListener('pointerdown', () => playMouseClick());
   nameOkBtn.addEventListener('click', confirmName);
   nameCancelBtn.addEventListener('click', closeNameDialog);
   nameInput.addEventListener('keydown', (e) => {
@@ -602,11 +963,11 @@ if (nameDialog && nameOkBtn && nameCancelBtn) {
 }
 
 // ============================================================
-// 喝水提醒
+// 喝水提醒（轻量版：智能调度 + 点击打卡 + 进度水色 + 目标庆祝）
 // ============================================================
-let waterReminderTimer = null;
-let waterReminderRestoreTimer = null;
-
+// localStorage 持久化的当日饮水状态：
+//   { date: 'YYYY-MM-DD', drunkML: 800, lastDrinkAt: 1712345678901, celebrated: false }
+// 日期变更自动重置（每日目标重新从 0 开始），无需手动清零。
 function invoke(command, args) {
   const T = window.__TAURI__;
   if (T && T.core && T.core.invoke) {
@@ -615,38 +976,184 @@ function invoke(command, args) {
   return Promise.resolve();
 }
 
-function showWaterReminder() {
-  // 窗口固定 300×340 永不移动：猫在窗口内从 128 平滑放大到 256×256（scale(2)），
-  // 顶部 96px 气泡区 + 窗口 340px 足够容纳放大后的猫，气泡仍显示在猫头顶上方。
+// 当前日期字符串（本地时区 'YYYY-MM-DD'，跨日判断用）。
+function todayStr() {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+// 从 localStorage 载入今日饮水状态；换天/数据损坏时自动重置。
+// 返回 { needRedraw }：跨日重置后需要重绘（清掉昨天的水色痕迹）。
+function loadWaterState() {
+  let needRedraw = false;
+  try {
+    const raw = localStorage.getItem(WATER_STATE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.date === todayStr() && typeof parsed.drunkML === 'number') {
+        waterState = {
+          date: parsed.date,
+          drunkML: Math.max(0, Math.min(parsed.drunkML, 99999)),
+          lastDrinkAt: typeof parsed.lastDrinkAt === 'number' ? parsed.lastDrinkAt : 0,
+          celebrated: !!parsed.celebrated,
+        };
+        return needRedraw;
+      }
+    }
+  } catch {
+    // localStorage 不可用 → 保持默认空状态
+  }
+  waterState = { date: todayStr(), drunkML: 0, lastDrinkAt: 0, celebrated: false };
+  needRedraw = true;
+  try {
+    localStorage.setItem(WATER_STATE_KEY, JSON.stringify(waterState));
+  } catch {
+    // 写失败仅内存生效
+  }
+  return needRedraw;
+}
+
+function saveWaterState() {
+  try {
+    localStorage.setItem(WATER_STATE_KEY, JSON.stringify(waterState));
+  } catch {
+    // localStorage 不可用时仅内存生效
+  }
+}
+
+// 今日饮水进度 0~1（按 WATER_DAILY_GOAL_ML 计算；超额 clamp 到 1）。
+// 只读内存值；跨日时由 date 检查触发重置（避免每 100ms 反复读 localStorage）。
+function getWaterProgress() {
+  if (waterState.date !== todayStr()) loadWaterState();
+  return Math.min(1, waterState.drunkML / WATER_DAILY_GOAL_ML);
+}
+
+// 进度水色：根据「已喝 / 目标」映射为淡蓝色叠加，带 30% 上下浮动让猫仍有层次。
+// 返回 null 表示完全没喝（无色）；进度 0.4 → rgba(64,164,255,0.12)，1.0 → rgba(64,164,255,0.36)。
+function getWaterTint() {
+  if (waterState.date !== todayStr()) loadWaterState();
+  const progress = waterState.drunkML / WATER_DAILY_GOAL_ML;
+  if (progress <= 0) return null;
+  const alpha = 0.02 + (progress / 1) * 0.34;
+  return { progress: Math.min(1, progress), css: `rgba(64, 164, 255, ${alpha.toFixed(3)})` };
+}
+
+// 距上次喝水已过多少分钟；从未喝过 → -1（表示「今天还没开始喝」，应提醒）。
+function minutesSinceLastDrink() {
+  if (!waterState.lastDrinkAt) return -1;
+  return (Date.now() - waterState.lastDrinkAt) / 60000;
+}
+
+// 是否已「太久没喝」需加强提醒（距上次喝水 > 90 分钟；从未喝过不算加强，只算首次）。
+function isWaterUrgent() {
+  const mins = minutesSinceLastDrink();
+  return mins >= 0 && mins >= WATER_URGENT_MS / 60000;
+}
+
+// 当前处于活跃提醒时段（08:00~23:00）才会自动提醒。
+function isWaterActiveHours() {
+  const h = new Date().getHours();
+  return h >= WATER_ACTIVE_START_HOUR && h < WATER_ACTIVE_END_HOUR;
+}
+
+// 是否应自动提醒：活跃时段 + 当日未达标 + 从未喝过（-1）或距上次喝水超冷却期。
+function shouldWaterRemind() {
+  if (!isWaterActiveHours()) return false;
+  if (getWaterProgress() >= 1) return false; // 今日目标已达 → 不再打扰
+  const mins = minutesSinceLastDrink();
+  return mins < 0 || mins * 60000 >= WATER_COOLDOWN_MS;
+}
+
+// 展示喝水提醒：气泡 + 猫抖一下 + 点击猫 = 喝水打卡。
+// 加强模式（距上次喝水 > 90 分钟）用更醒目的文案。
+function showWaterReminder(urgent) {
   document.body.classList.add('water-active');
   const name = getPetName();
-  showToast(name ? `${name}，该喝水啦，起来接一杯水吧` : '该喝水啦，起来接一杯水吧');
-  advanceOneFrame();
+  const who = name ? name : '';
+  const base = who ? `${who}，该喝水啦，起来接一杯水吧` : '该喝水啦，起来接一杯水吧';
+  const urgentMsg = who ? `${who}，好久没喝水了！点我喝一杯吧` : '好久没喝水了！点我喝一杯吧';
+  showToast(urgent ? urgentMsg : base);
+  startDrinkAnimation();
+  // 首次用户点击后才预热 AudioContext；若已预热则提醒喵声立即播放
+  if (audioWarmedUp) playBuffer('meow-alert');
   clearTimeout(waterReminderRestoreTimer);
   waterReminderRestoreTimer = setTimeout(() => {
     document.body.classList.remove('water-active');
+    stopDrinkAnimation();
   }, WATER_REMINDER_VISIBLE_MS);
 }
 
-function startWaterReminder() {
+// 读取外部触发的提醒强度：距上次喝水 > 90 分钟 → 加强文案。
+function externalWaterRemind() {
+  showWaterReminder(isWaterUrgent());
+}
+
+// 时间调度：在活跃时段内按固定间隔检查。每小时补偿一次跨日/
+// 非活跃时间引起的「是否该提醒」，因此无需每天 00:00 的定时器。
+function scheduleWaterReminder() {
   if (waterReminderTimer) clearInterval(waterReminderTimer);
-  waterReminderTimer = setInterval(showWaterReminder, WATER_REMINDER_INTERVAL);
+  waterReminderTimer = setInterval(() => {
+    if (shouldWaterRemind()) showWaterReminder(isWaterUrgent());
+  }, WATER_REMINDER_INTERVAL);
+}
+
+// ---- 喝水打卡：点击猫 = 喝 200ml ----
+// 提醒气泡显示期间点击猫 → 喝水打卡（喝水光晕 8 秒窗口内连点可连续喝多杯）。
+function shouldDrinkOnClick() {
+  return document.body.classList.contains('water-active') &&
+    getWaterProgress() < 1 && // 今日未达标
+    isWaterActiveHours();
+}
+
+// 打卡喝水：喝 200ml → 猫抖一下 + 进度水色加深；达成目标 → 庆祝气泡。
+// 返回 true 表示「这是一次喝水点击」（不应再播放 slap 敲击音）。
+function handleWaterDrink() {
+  if (isWaterActiveHours()) {
+    loadWaterState();
+    if (waterState.drunkML < WATER_DAILY_GOAL_ML) {
+      waterState.drunkML = Math.min(WATER_DAILY_GOAL_ML, waterState.drunkML + WATER_DRINK_ML);
+      waterState.lastDrinkAt = Date.now();
+      const completed = waterState.drunkML >= WATER_DAILY_GOAL_ML;
+      if (completed) {
+        waterState.celebrated = true;
+        saveWaterState();
+        showToast('🎉 今日饮水目标达成！');
+      } else {
+        saveWaterState();
+        showToast('💧 咕咚！喝了一杯水 (+200ml)');
+      }
+      document.body.classList.add('water-active');
+      startDrinkAnimation();
+      clearTimeout(waterReminderRestoreTimer);
+      waterReminderRestoreTimer = setTimeout(() => {
+        document.body.classList.remove('water-active');
+        stopDrinkAnimation();
+      }, WATER_REMINDER_VISIBLE_MS);
+      return true;
+    }
+  }
+  return false;
 }
 
 // ============================================================
 // 休息拉伸提醒
 // ============================================================
 let stretchTimer = null;
+let stretchRestoreTimer = null;
 
 function showStretchReminder() {
   const name = getPetName();
   showToast(name ? `${name}，起来拉伸一下吧！久坐容易疲劳` : '🧘 起来拉伸一下吧！久坐容易疲劳');
-  advanceOneFrame();
-  setPetState('typing');
-  clearTimeout(typingStateTimer);
-  typingStateTimer = setTimeout(() => {
-    if (petState === 'typing') setPetState('idle');
-  }, TYPING_VISIBLE_MS);
+  startStretchAnimation();
+  // 首次用户点击后才预热 AudioContext；若已预热则拉伸喵声立即播放
+  if (audioWarmedUp) playBuffer('meow');
+  // 动画播完停在最后一帧，保持到提醒窗口结束再恢复小猫
+  clearTimeout(stretchRestoreTimer);
+  stretchRestoreTimer = setTimeout(() => {
+    stopStretchAnimation();
+  }, WATER_REMINDER_VISIBLE_MS);
 }
 
 function startStretchReminder() {
@@ -779,8 +1286,9 @@ function setPanelExpanded(expanded) {
   invoke('set_panel_expanded', { expanded });
 }
 
-// 暂停/继续按钮
+// 暂停/继续按钮：按下瞬间播放点击音效（pointerdown 比 click 提前，跟手同步）
 if (pomodoroPauseBtn) {
+  pomodoroPauseBtn.addEventListener('pointerdown', () => playMouseClick());
   pomodoroPauseBtn.addEventListener('click', () => {
     if (pomodoroState === 'paused') startPomodoro();
     else pausePomodoro();
@@ -789,6 +1297,7 @@ if (pomodoroPauseBtn) {
 
 // 取消按钮
 if (pomodoroCancelBtn) {
+  pomodoroCancelBtn.addEventListener('pointerdown', () => playMouseClick());
   pomodoroCancelBtn.addEventListener('click', cancelPomodoro);
 }
 
@@ -798,6 +1307,9 @@ if (pomodoroCancelBtn) {
 function init() {
   const T = window.__TAURI__;
   const win = T && T.window ? T.window.getCurrentWindow() : null;
+
+  // 首次用户点击（任意位置）把 AudioContext 切到 running（解码已在 initSoundSystem 完成）
+  document.addEventListener('pointerdown', resumeAudio, { once: true });
 
   // 全局键盘由 Rust/keytap 发送；本地 keydown 作为权限未开启时的兜底。
   if (T && T.event && T.event.listen) {
@@ -817,12 +1329,13 @@ function init() {
   // Toast 监听
   if (T && T.event && T.event.listen) {
     T.event.listen('show-toast', (event) => showToast(event.payload));
-    T.event.listen('water-reminder-now', () => showWaterReminder());
+    T.event.listen('water-reminder-now', () => externalWaterRemind());
     T.event.listen('stretch-reminder-now', () => showStretchReminder());
     T.event.listen('open-pomodoro', () => {
       startPomodoro();
     });
     T.event.listen('open-name-dialog', () => {
+      // 点「告诉我名字」菜单项：直接打开名字输入框（无需音效）
       openNameDialog();
     });
   }
@@ -838,6 +1351,8 @@ function init() {
     const dpr = window.devicePixelRatio || 1;
     canvas.addEventListener('pointerdown', async (e) => {
       if (e.button === 0) {
+        // 不在按下时播放 slap（否则拖动会漏音）。
+        // 改为 pointerup 时判断：未拖动（敲击）才播，拖动则完全不发声。
         // 左键点击瞬间：播放一次性果冻弹跳（掘金「果冻大法」jelly-jump 简化版）。
         // 只在按下瞬间触发（animation 0.9s 播完 animationend 移除 class → 长按不再触发）。
         canvas.classList.remove('click-jelly');
@@ -849,6 +1364,7 @@ function init() {
 
         // 记录拖拽基准（屏幕逻辑坐标 + 窗口物理坐标）
         dragging = true;
+        dragMoved = false; // 本次按下尚未移动 → 视为点击（敲击）
         try {
           const pos = await win.outerPosition();
           dragStartPointerX = e.screenX;
@@ -869,6 +1385,11 @@ function init() {
       if (!dragging) return;
       const dx = e.screenX - dragStartPointerX;
       const dy = e.screenY - dragStartPointerY;
+      // 移动超过 5px 视为拖拽，不算点击 → 立即掐断敲击音效
+      if (Math.hypot(dx, dy) > 5) {
+        dragMoved = true;
+        stopSlap();
+      }
       lastPointerX = e.screenX;
       lastPointerY = e.screenY;
       try {
@@ -886,6 +1407,16 @@ function init() {
     canvas.addEventListener('pointerup', (e) => {
       if (dragging) {
         dragging = false;
+        if (dragMoved) {
+          // 拖动过 → 完全无声
+          stopSlap();
+        } else if (shouldDrinkOnClick()) {
+          // 提醒气泡期间点击猫 = 喝水打卡（喝 200ml）
+          handleWaterDrink();
+        } else {
+          // 普通点击猫 → 播放 slap 敲击
+          playSlap();
+        }
         try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
       }
     });
@@ -917,7 +1448,11 @@ function init() {
   scheduleBlink();
   setInterval(updateIdleState, 250);
   setInterval(heatLoop, 100);
-  startWaterReminder();
+  initSoundSystem();
+  setInterval(drinkTick, DRINK_FRAME_MS);
+  setInterval(stretchTick, STRETCH_FRAME_MS);
+  loadWaterState();
+  scheduleWaterReminder();
   startStretchReminder();
 
   // 拖拽方向感知形变主循环：rAF 常驻，拖动时计算形变写 wrapper transform。

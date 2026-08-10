@@ -9,14 +9,11 @@ use std::time::Duration;
 use tauri::menu::CheckMenuItem;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{
-    Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, WebviewWindow,
-};
+use tauri::{Emitter, LogicalSize, Manager, Size, WebviewWindow};
 use tauri_nspanel::{tauri_panel, PanelLevel, StyleMask, WebviewWindowExt};
 
 struct AppWindow(Mutex<Option<WebviewWindow>>);
 struct PanelExpanded(Mutex<bool>);
-struct WaterRestoreState(Mutex<Option<WindowSnapshot>>);
 
 /// 「窗口置顶」开关状态。右键菜单与 Tray 菜单共享同一份状态。
 struct AlwaysOnTop(Mutex<bool>);
@@ -28,7 +25,6 @@ struct TrayPinItem(Mutex<Option<CheckMenuItem<tauri::Wry>>>);
 struct StartupEnabled(Mutex<bool>);
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PET_SIZE: f64 = 128.0;
 // 窗口固定尺寸 260×305：启动后永不 resize/移动（避免 WKWebView 重排导致猫闪烁）。
 // 宽度 = 名字输入框 258px 左右各多 1px；高度 = 金色输入框底部 290px + 15px 间距。
 // 布局：顶部 0~96px 气泡区；猫固定在 96~224px（水平居中）；
@@ -39,18 +35,6 @@ const WINDOW_HEIGHT: f64 = 305.0;
 // macOS LaunchAgent 文件名：com.jun.desktop-pet.plist
 const LAUNCH_AGENT_LABEL: &str = "com.jun.desktop-pet";
 const LAUNCH_AGENT_FILENAME: &str = "com.jun.desktop-pet.plist";
-
-#[derive(Clone, Copy)]
-struct WindowSnapshot {
-    // 放大前窗口左上角坐标（NSWindow frame 的 origin，点单位），恢复时平滑回到原位。
-    origin_x: f64,
-    origin_y: f64,
-    // 放大前窗口尺寸（点单位）。可能是常态 128×128 或番茄钟扩展 128×150。
-    width: f64,
-    height: f64,
-    // 放大前是否处于番茄钟扩展模式，恢复时还原界面状态。
-    pomodoro_expanded: bool,
-}
 
 tauri_panel! {
     panel!(BasicPanel {
@@ -260,107 +244,6 @@ fn center_window(window: &WebviewWindow) {
     }
 }
 
-/// 读取当前窗口 frame：返回 (origin_x, origin_y, width, height)，单位点。
-#[cfg(target_os = "macos")]
-fn current_frame(window: &tauri::WebviewWindow) -> (f64, f64, f64, f64) {
-    use objc2::msg_send;
-    use objc2::runtime::NSObject;
-    use objc2_foundation::NSRect;
-
-    if let Ok(ptr) = window.ns_window() {
-        let ns_window: *mut NSObject = ptr as *mut NSObject;
-        if !ns_window.is_null() {
-            unsafe {
-                let frame: NSRect = msg_send![ns_window, frame];
-                return (frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
-            }
-        }
-    }
-    (0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT)
-}
-
-/// 以 (cx, cy) 为中心、w×h 尺寸，用原生 `setFrame:display:` 原子设置窗口 frame。
-/// 单帧原子生效，配合逐帧插值即可得到平滑动画。
-#[cfg(target_os = "macos")]
-fn set_frame_centered(window: &tauri::WebviewWindow, cx: f64, cy: f64, w: f64, h: f64) {
-    use objc2::msg_send;
-    use objc2::runtime::NSObject;
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
-
-    if let Ok(ptr) = window.ns_window() {
-        let ns_window: *mut NSObject = ptr as *mut NSObject;
-        if ns_window.is_null() {
-            return;
-        }
-        unsafe {
-            let new_rect = NSRect {
-                origin: NSPoint::new(cx - w / 2.0, cy - h / 2.0),
-                size: NSSize { width: w, height: h },
-            };
-            let _: () = msg_send![ns_window, setFrame: new_rect, display: true];
-        }
-    }
-}
-
-/// 当前窗口主显示器屏幕中心（点单位）。
-#[cfg(target_os = "macos")]
-fn screen_center_point(window: &tauri::WebviewWindow) -> (f64, f64) {
-    if let Ok(Some(monitor)) = window.primary_monitor() {
-        let scale = window.scale_factor().unwrap_or(1.0);
-        let cx = (monitor.position().x as f64 + monitor.size().width as f64 / 2.0) / scale;
-        let cy = (monitor.position().y as f64 + monitor.size().height as f64 / 2.0) / scale;
-        (cx, cy)
-    } else {
-        (0.0, 0.0)
-    }
-}
-
-/// 逐帧平滑动画：从 (start_cx, start_cy, start_w, start_h) 用 ease-out 插值到
-/// (target_cx, target_cy, target_w, target_h)，每 16ms 一帧、共 25 帧（约 0.4s）。
-///
-/// 必须在后台线程调用（本函数内部会 sleep 阻塞），每帧通过 run_on_main_thread
-/// 设置 frame。动画在函数返回前完成 → JS invoke resolve 即代表动画结束。
-#[cfg(target_os = "macos")]
-fn animate_zoom(
-    app: &tauri::AppHandle,
-    start_cx: f64,
-    start_cy: f64,
-    start_w: f64,
-    start_h: f64,
-    target_cx: f64,
-    target_cy: f64,
-    target_w: f64,
-    target_h: f64,
-) {
-    const FRAME_MS: u64 = 16;
-    const FRAMES: u64 = 25;
-
-    for i in 1..=FRAMES {
-        let t = i as f64 / FRAMES as f64;
-        // ease-out cubic：先快后慢，贴近 macOS 原生手感。
-        let e = 1.0 - (1.0 - t).powi(3);
-        let cx = start_cx + (target_cx - start_cx) * e;
-        let cy = start_cy + (target_cy - start_cy) * e;
-        let w = start_w + (target_w - start_w) * e;
-        let h = start_h + (target_h - start_h) * e;
-
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = app.run_on_main_thread(move || {
-                set_frame_centered(&window, cx, cy, w, h);
-            });
-        }
-        std::thread::sleep(Duration::from_millis(FRAME_MS));
-    }
-
-    // 最后一帧精确到位，避免时序误差。
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = app.run_on_main_thread(move || {
-            set_frame_centered(&window, target_cx, target_cy, target_w, target_h);
-        });
-    }
-}
-
-// 窗口固定尺寸，永不 resize。函数保留仅作占位（旧调用残留），实际不做任何改动。
 fn set_window_panel_mode(_window: &WebviewWindow, _expanded: bool) -> tauri::Result<()> {
     Ok(())
 }
@@ -598,37 +481,12 @@ fn set_panel_expanded(
     Ok(())
 }
 
-// 窗口固定、永不动：喝水提醒只是在窗口内显示 UI，无需移动窗口。
-#[tauri::command]
-fn focus_water_reminder(_app: tauri::AppHandle) -> Result<(), String> {
-    Ok(())
-}
-
-// 窗口固定、永不动：名字弹窗只是显示/隐藏，无需移动窗口。
-#[tauri::command]
-fn focus_name_dialog(_app: tauri::AppHandle) -> Result<(), String> {
-    Ok(())
-}
-
-// 窗口固定、永不动：关闭名字弹窗无窗口动画。
-#[tauri::command]
-fn restore_name_dialog() -> Result<(), String> {
-    Ok(())
-}
-
-// 窗口固定、永不动：恢复喝水提醒无窗口动画。
-#[tauri::command]
-fn restore_water_reminder() -> Result<(), String> {
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_nspanel::init())
         .manage(AppWindow(Mutex::new(None)))
         .manage(PanelExpanded(Mutex::new(false)))
-        .manage(WaterRestoreState(Mutex::new(None)))
         .manage(AlwaysOnTop(Mutex::new(true)))
         .manage(TrayPinItem(Mutex::new(None)))
         .manage(StartupEnabled(Mutex::new(startup_enabled())))
@@ -636,11 +494,7 @@ pub fn run() {
             keep_on_top,
             show_context_menu,
             make_panel_key,
-            set_panel_expanded,
-            focus_water_reminder,
-            restore_water_reminder,
-            focus_name_dialog,
-            restore_name_dialog
+            set_panel_expanded
         ])
         .on_menu_event(menu_event_handler)
         .setup(|app| {
