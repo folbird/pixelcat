@@ -21,7 +21,7 @@ const WATER_STATE_KEY = 'pixelcat.water';
 // drawIdleFrame() 在文件中部顶层调用 → applyHeatEffects() → getWaterTint() 会读取
 // waterState；若声明在后面的喝水区块，此时它处于 TDZ 会抛 ReferenceError，
 // 中断整个脚本导致 init()（拖动/右键/点击/眨眼）全部失效、只剩一只静态猫。
-let waterState = { date: '', drunkML: 0, lastDrinkAt: 0, celebrated: false };
+let waterState = { date: '', drunkML: 0, lastDrinkAt: 0, celebrated: false, log: [] };
 let waterReminderTimer = null;
 let waterReminderRestoreTimer = null;
 const SLEEP_AFTER_IDLE_MS = 30 * 1000;
@@ -305,9 +305,9 @@ function handleTyping() {
     keyTimes.shift();
   }
   updateHeat();
-  // 覆盖动画期间：只记录热度和水色，不覆盖覆盖帧
+  // 覆盖动画期间：只叠加红温后处理，不覆盖覆盖帧
   if (isOverlayActive()) {
-    if (petHeat > 0 || getWaterTint() !== null) redrawOverlay();
+    if (petHeat > 0) redrawOverlay();
     return;
   }
   advanceOneFrame();
@@ -341,9 +341,8 @@ function updateHeat() {
 // 把当前红温强度映射到画面后处理：仅猫身像素叠加红色，眼睛（眼白+瞳孔）保持原色。
 // 速率 ≤ 阈值时 petHeat=0 完全不渲染；超过后红色从 0 平滑渐显，满强度达到 HEAT_MAX_ALPHA。
 function applyHeatEffects() {
-  const waterTint = getWaterTint();
   const heatAlpha = petHeat > 0 ? (petHeat / HEAT_MAX) * HEAT_MAX_ALPHA : 0;
-  if (heatAlpha <= 0 && !waterTint) return;
+  if (heatAlpha <= 0) return;
 
   // 1) 备份当前干净帧（原猫）。
   if (!heatScratchCanvas) {
@@ -355,26 +354,14 @@ function applyHeatEffects() {
   heatScratchCtx.clearRect(0, 0, canvas.width, canvas.height);
   heatScratchCtx.drawImage(canvas, 0, 0);
 
-  // 2) 先叠加喝水水色（source-atop 只染猫身像素，透明背景不受影响）。
-  //    进度越高越蓝（补水感）；不打字红温时也常驻显示。
-  if (waterTint) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.fillStyle = waterTint.css;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  }
+  // 2) 叠加打字红温（仅猫身像素叠加红色，眼睛保护区贴回原像素）。
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.fillStyle = `rgba(235, 50, 35, ${heatAlpha.toFixed(3)})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
 
-  // 3) 再叠加打字红温（盖在水色之上，红热感仍清晰；两者同显时猫呈红蓝色）。
-  if (heatAlpha > 0) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.fillStyle = `rgba(235, 50, 35, ${heatAlpha.toFixed(3)})`;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  }
-
-  // 4) 眼睛保护区：把原猫像素贴回眼睛矩形，水色/红色都不染眼白与瞳孔。
+  // 3) 眼睛保护区：把原猫像素贴回眼睛矩形，红色不染眼白与瞳孔。
   const rects = petState === 'typing' ? HEAT_EYE_RECTS_TYPING : HEAT_EYE_RECTS_IDLE;
   for (const r of rects) {
     ctx.save();
@@ -391,16 +378,15 @@ function applyHeatEffects() {
 }
 
 // 热度主循环：冷却 + 有热度时重绘当前帧（红色叠加随热度平滑变化）。
-// 同时处理喝水进度水色：有喝水记录时也持续重绘，水色随打卡/跨日实时刷新。
 // 喝水动画播放期间：保持喝水帧（heatLoop 不覆盖喝水帧内容）。
 function heatLoop() {
   updateHeat();
   if (isOverlayActive()) {
-    // 覆盖动画期间：只重绘后处理（红温/水色实时刷新），不重画帧
-    if (petHeat > 0 || getWaterTint() !== null) redrawOverlay();
+    // 覆盖动画期间：只重绘红温后处理，不重画帧
+    if (petHeat > 0) redrawOverlay();
     return;
   }
-  if (petHeat > 0 || getWaterTint() !== null) {
+  if (petHeat > 0) {
     if (petState === 'typing') drawFrame(frameIndex);
     else drawIdleFrame();
   }
@@ -463,9 +449,9 @@ function handleCursorPosition(event) {
   const followSmooth = (tx === 0 && ty === 0) ? EYE_RETURN_SMOOTH : EYE_FOLLOW_SMOOTH;
   eyeOffsetX += (tx - eyeOffsetX) * followSmooth;
   eyeOffsetY += (ty - eyeOffsetY) * followSmooth;
-  // 覆盖动画期间：不重绘 idle（保持覆盖帧），仅当有红温/水色时刷新后处理
+  // 覆盖动画期间：不重绘 idle（保持覆盖帧），仅当有红温时刷新后处理
   if (isOverlayActive()) {
-    if (petHeat > 0 || getWaterTint() !== null) redrawOverlay();
+    if (petHeat > 0) redrawOverlay();
     return;
   }
   if (petState !== 'typing') drawIdleFrame();
@@ -742,7 +728,7 @@ function drawDrinkFrame() {
     sx, sy, DRINK_FRAME_W, DRINK_FRAME_H,
     0, dy, canvas.width, dh
   );
-  // 喝水配色与红温共用同一套后处理：进度水色叠加/打字红温不污染眼睛
+  // 红温后处理（猫身变红，眼睛保护区不染）
   applyHeatEffects();
 }
 
@@ -807,6 +793,7 @@ function drawStretchFrame() {
     sx, sy, STRETCH_FRAME_W, STRETCH_FRAME_H,
     0, dy, canvas.width, dh
   );
+  // 红温后处理（猫身变红，眼睛保护区不染）
   applyHeatEffects();
 }
 
@@ -998,6 +985,7 @@ function loadWaterState() {
           drunkML: Math.max(0, Math.min(parsed.drunkML, 99999)),
           lastDrinkAt: typeof parsed.lastDrinkAt === 'number' ? parsed.lastDrinkAt : 0,
           celebrated: !!parsed.celebrated,
+          log: Array.isArray(parsed.log) ? parsed.log : [],
         };
         return needRedraw;
       }
@@ -1005,7 +993,7 @@ function loadWaterState() {
   } catch {
     // localStorage 不可用 → 保持默认空状态
   }
-  waterState = { date: todayStr(), drunkML: 0, lastDrinkAt: 0, celebrated: false };
+  waterState = { date: todayStr(), drunkML: 0, lastDrinkAt: 0, celebrated: false, log: [] };
   needRedraw = true;
   try {
     localStorage.setItem(WATER_STATE_KEY, JSON.stringify(waterState));
@@ -1030,14 +1018,16 @@ function getWaterProgress() {
   return Math.min(1, waterState.drunkML / WATER_DAILY_GOAL_ML);
 }
 
-// 进度水色：根据「已喝 / 目标」映射为淡蓝色叠加，带 30% 上下浮动让猫仍有层次。
-// 返回 null 表示完全没喝（无色）；进度 0.4 → rgba(64,164,255,0.12)，1.0 → rgba(64,164,255,0.36)。
-function getWaterTint() {
-  if (waterState.date !== todayStr()) loadWaterState();
-  const progress = waterState.drunkML / WATER_DAILY_GOAL_ML;
-  if (progress <= 0) return null;
-  const alpha = 0.02 + (progress / 1) * 0.34;
-  return { progress: Math.min(1, progress), css: `rgba(64, 164, 255, ${alpha.toFixed(3)})` };
+// ---- 喝水记录图表面板（独立 NSPanel，参考 water_log_pixel.html）----
+// 每次打卡把时间点记入 waterState.log；点击「喝水提醒」时调用 Rust 命令
+// show_water_log 打开独立的 520×360 喝水记录面板（不挤占小猫主窗口）。
+// 面板由 src-tauri/src/lib.rs 的 PanelBuilder 创建，页面为 water-log.html。
+function openWaterLogPanel() {
+  invoke('show_water_log', {});
+}
+
+function closeWaterLogPanel() {
+  invoke('hide_water_log', {});
 }
 
 // 距上次喝水已过多少分钟；从未喝过 → -1（表示「今天还没开始喝」，应提醒）。
@@ -1070,6 +1060,7 @@ function shouldWaterRemind() {
 // 加强模式（距上次喝水 > 90 分钟）用更醒目的文案。
 function showWaterReminder(urgent) {
   document.body.classList.add('water-active');
+  // 注意：播放喝水动画时不弹图表面板（图表面板仅由右键菜单「喝水提醒」主动打开）
   const name = getPetName();
   const who = name ? name : '';
   const base = who ? `${who}，该喝水啦，起来接一杯水吧` : '该喝水啦，起来接一杯水吧';
@@ -1115,6 +1106,9 @@ function handleWaterDrink() {
     if (waterState.drunkML < WATER_DAILY_GOAL_ML) {
       waterState.drunkML = Math.min(WATER_DAILY_GOAL_ML, waterState.drunkML + WATER_DRINK_ML);
       waterState.lastDrinkAt = Date.now();
+      // 记录本次喝水时间点（图表面板横轴用它画阶梯累计）
+      if (!waterState.log) waterState.log = [];
+      waterState.log.push({ t: Date.now(), ml: WATER_DRINK_ML });
       const completed = waterState.drunkML >= WATER_DAILY_GOAL_ML;
       if (completed) {
         waterState.celebrated = true;
@@ -1329,7 +1323,11 @@ function init() {
   // Toast 监听
   if (T && T.event && T.event.listen) {
     T.event.listen('show-toast', (event) => showToast(event.payload));
-    T.event.listen('water-reminder-now', () => externalWaterRemind());
+    // 「喝水提醒」菜单点击：播放喝水动画 + 在小猫左上方打开喝水记录图表面板（× 关闭）
+    T.event.listen('water-reminder-now', () => {
+      showWaterReminder(isWaterUrgent());
+      openWaterLogPanel();
+    });
     T.event.listen('stretch-reminder-now', () => showStretchReminder());
     T.event.listen('open-pomodoro', () => {
       startPomodoro();
@@ -1443,7 +1441,6 @@ function init() {
       }
     }, 1200);
   }
-
   setPetState('idle');
   scheduleBlink();
   setInterval(updateIdleState, 250);

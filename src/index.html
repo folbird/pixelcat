@@ -4,8 +4,6 @@
   <meta charset="utf-8" />
   <title>Desktop Pet</title>
   <style>
-    /* Ark Pixel 像素字体（支持简体中文）：放入 src/assets/ 后自动加载生效。
-       未放入时回退到等宽字体（不影响功能）。 */
     @font-face {
       font-family: "ArkPixel12";
       src: url("./assets/ark-pixel-12px-proportional-latin.ttf") format("truetype");
@@ -20,12 +18,10 @@
       font-family: "ArkPixel12CN", "ArkPixel12", "Monaco", "Menlo", "Courier New", monospace;
     }
     :root {
-      /* 果冻弹簧物理参数（可调手感）：
-         刚度越大跟随越快；阻尼越大抖动衰减越快。 */
       --jelly-stiff: 0.12;
       --jelly-damp: 0.8;
-      --jelly-max-offset: 40px;  /* 猫在窗口内最大滞后偏移 */
-      --jelly-max-stretch: 0.3;  /* 拖拽最大拉伸 30% */
+      --jelly-max-offset: 40px;
+      --jelly-max-stretch: 0.3;
     }
     html, body {
       margin: 0;
@@ -35,51 +31,31 @@
       width: 100%;
       height: 100%;
     }
-    /* 果冻拖拽：窗口固定 260×305、永不移动。猫的水平居中定位移到 wrapper，
-       JS 每帧用弹簧物理给 wrapper 设置 transform（滞后偏移+拉伸+旋转）实现果冻，
-       内部 #pet 只保留 idle-breathe/blink/typing 等自身动画。 */
     #pet-wrapper {
       position: fixed;
       top: 96px;
-      /* 水平居中 = 50% - 半宽(64px)。
-         注意：不再用 JS matrix 覆盖（拖拽期间 rAF 会被 macOS 原生拖动循环冻结），
-         拖拽果冻改用 CSS 动画 drag-jelly；松手移除动画后靠弹性 transition 回位。 */
       left: calc(50% - 64px);
       width: 128px;
       height: 128px;
-      /* 猫固定在 96~224px（水平居中）由 wrapper 承担；
-         顶部 0~96px 气泡区，猫下方 224~305px 倒计时/按钮/输入框区。 */
       transform-origin: center center;
-      /* 注意：不能给 wrapper 加 transform transition —— dragLoop 每帧
-         写 inline transform（形变衰减回位是物理阻尼实现的），
-         若再带 transition 会和每帧更新打架导致形变粘滞/回弹异常。 */
       z-index: 50;
       pointer-events: none;
     }
-    /* 拖拽方向感知形变由 JS 每帧写 wrapper 的 transform（手动拖动窗口，
-       不用原生 startDragging，避免 rAF 被冻结），此处只保留松手回位弹性。 */
     #pet {
       width: 128px;
       height: 128px;
       image-rendering: pixelated;
       cursor: grab;
       transform-origin: center center;
-      /* 果冻位移由 JS requestAnimationFrame 驱动 wrapper，不用 CSS transition */
       transition: none;
       pointer-events: auto;
     }
-    #pet:active {
-      cursor: grabbing;
-    }
+    #pet:active { cursor: grabbing; }
 
-    /* 喝水提醒激活（提醒气泡/喝水打卡反馈）：
-       猫抖一下 + 淡蓝光晕，让「点击猫喝水」有明确反馈。
-       注意：只动 #pet 自身 transform/filter，不与 dragLoop 写的 wrapper transform 冲突。 */
     body.water-active #pet {
       animation: water-gulp 0.55s ease-out;
       filter: drop-shadow(0 0 5px rgba(90, 180, 255, 0.65)) brightness(1.06);
     }
-
     @keyframes water-gulp {
       0% { transform: scale(1); }
       30% { transform: scale(1.14) translateY(-4px); }
@@ -87,42 +63,14 @@
       100% { transform: scale(1); }
     }
 
-    /* 待机时模拟参考项目里的呼吸、眨眼和睡觉状态。 */
-    body.pet-idle #pet {
-      animation: idle-breathe 2.4s ease-in-out infinite;
-    }
+    body.pet-idle #pet { animation: idle-breathe 2.4s ease-in-out infinite; }
+    body.pet-blink #pet { animation: idle-blink 0.16s ease-in-out; }
+    body.pet-sleep #pet { animation: sleep-breathe 3.2s ease-in-out infinite; filter: saturate(0.72) brightness(0.86); }
+    body.pet-typing #pet { animation: typing-hop 0.18s ease-out; }
+    @keyframes idle-breathe { 0%,100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-1px) scaleY(1.015); } }
+    @keyframes idle-blink { 0%,100% { transform: scaleY(1); } 45%,65% { transform: scaleY(0.86); } }
+    @keyframes sleep-breathe { 0%,100% { transform: translateY(1px) scaleY(0.96); } 50% { transform: translateY(2px) scaleY(0.985); } }
 
-    body.pet-blink #pet {
-      animation: idle-blink 0.16s ease-in-out;
-    }
-
-    body.pet-sleep #pet {
-      animation: sleep-breathe 3.2s ease-in-out infinite;
-      filter: saturate(0.72) brightness(0.86);
-    }
-
-    body.pet-typing #pet {
-      animation: typing-hop 0.18s ease-out;
-    }
-
-    @keyframes idle-breathe {
-      0%, 100% { transform: translateY(0) scaleY(1); }
-      50% { transform: translateY(-1px) scaleY(1.015); }
-    }
-
-    @keyframes idle-blink {
-      0%, 100% { transform: scaleY(1); }
-      45%, 65% { transform: scaleY(0.86); }
-    }
-
-    @keyframes sleep-breathe {
-      0%, 100% { transform: translateY(1px) scaleY(0.96); }
-      50% { transform: translateY(2px) scaleY(0.985); }
-    }
-
-    /* 左键点击猫时的一次性果冻弹跳（源自掘金「果冻大法」jelly-jump，
-       适配本布局去掉基础 translate，只保留 translateY/scaleX/scaleY/rotate）：
-       先下蹲挤压 → 跳起 → 左右摇摆 → 回弹收缩 → 停。 */
     @keyframes pet-click-jelly {
       0% { transform: translateY(0) scale(1) scaleY(1); }
       10% { transform: translateY(5px) scale(1.2) scaleY(0.8); }
@@ -134,17 +82,8 @@
       85% { transform: translateY(0) scaleX(1.05) scaleY(0.95) rotate(0); }
       100% { transform: translateY(0) scaleX(1) scaleY(1); }
     }
-    /* 点击弹跳：body #pet.click-jelly 特异性 ≥ body.pet-* #pet（且位于其后），
-       能覆盖待机/眨眼/睡觉/打字的 animation；播完由 JS 移除 class 恢复原状态。 */
-    body #pet.click-jelly {
-      animation: pet-click-jelly 0.9s ease 1;
-    }
+    body #pet.click-jelly { animation: pet-click-jelly 0.9s ease 1; }
 
-    /* Toast 提醒气泡：红底白字像素字体，带硬投影（像素感）。
-       固定在小猫正上方（窗口 0~96px 气泡区），气泡尖朝下指向小猫。
-       窗口固定 300×340 不移动，气泡始终在猫正上方，永不遮挡猫身。 */
-    /* 红底白字提醒气泡（喝水/休息拉伸/番茄钟提示共用）：
-       基础位置 top:22px（较默认 6px 下调 16px）；番茄钟激活时 top:54px（再下调 32px）。 */
     #toast {
       position: fixed;
       top: 22px;
@@ -177,35 +116,21 @@
       border: 6px solid transparent;
       border-top-color: #e63946;
     }
-    #toast.show {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
-
-    /* 番茄钟激活时：气泡较普通状态再下调 32px（含暂停/取消/继续等字样）。 */
-    body.pomodoro-active #toast {
-      top: 54px;
-    }
-
-    /* 「番茄钟已取消」提示：取消后 body 不再 pomodoro-active，
-       普通态 22px 基础上再下移 20px → 42px。 */
-    #toast.toast-extra-down {
-      top: 42px;
-    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    body.pomodoro-active #toast { top: 54px; }
+    #toast.toast-extra-down { top: 42px; }
 
     #pomodoro-display {
       position: fixed;
-      /* 窗口固定 260×305：猫在 96~224px，倒计时显示在猫正下方（235~259px）。 */
       top: 225px;
       left: 50%;
       transform: translateX(calc(-50% + 0px));
-      /* 水平居中基础上右移 1px。 */
       padding: 2px 10px;
       font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       font-size: 13px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
-      color: #333;  
+      color: #333;
       text-align: center;
       letter-spacing: 0;
       background: transparent;
@@ -217,16 +142,9 @@
       white-space: nowrap;
       z-index: 80;
     }
-    body.pomodoro-active #pomodoro-display {
-      opacity: 1;
-    }
-    body.pomodoro-paused #pomodoro-display {
-      opacity: 0.48;
-    }
+    body.pomodoro-active #pomodoro-display { opacity: 1; }
+    body.pomodoro-paused #pomodoro-display { opacity: 0.48; }
 
-    /* 番茄钟控制按钮：暂停/继续 + 取消，仅在番茄钟活动或暂停时显示。
-       窗口固定 260×305：猫(96~224px)，倒计时(235~259px)，
-       两个按钮水平居中紧凑排列在倒计时下方（top 260~282px），间隙 4px。 */
     .pomodoro-btn {
       position: fixed;
       top: 255px;
@@ -252,28 +170,14 @@
       box-sizing: border-box;
     }
     body.pomodoro-active .pomodoro-btn,
-    body.pomodoro-paused .pomodoro-btn {
-      opacity: 1;
-      pointer-events: auto;
-    }
-    .pomodoro-btn:hover {
-      background: rgba(255, 255, 255, 0.97);
-    }
-    .pomodoro-btn:active {
-      background: rgba(255, 255, 255, 0.85);
-    }
-    #pomodoro-pause-btn {
-      left: 50%;
-      transform: translateX(calc(-50% - 14px));
-    }
-    #pomodoro-cancel-btn {
-      left: 50%;
-      transform: translateX(calc(-50% + 14px));
-    }
+    body.pomodoro-paused .pomodoro-btn { opacity: 1; pointer-events: auto; }
+    .pomodoro-btn:hover { background: rgba(255, 255, 255, 0.97); }
+    .pomodoro-btn:active { background: rgba(255, 255, 255, 0.85); }
+    #pomodoro-pause-btn { left: 50%; transform: translateX(calc(-50% - 14px)); }
+    #pomodoro-cancel-btn { left: 50%; transform: translateX(calc(-50% + 14px)); }
 
     #sleep-z {
       position: fixed;
-      /* 小猫右上角：上沿 92px（猫头顶 96px 上方 4px）、右沿 66px（猫右缘对齐 66px）。 */
       top: 92px;
       right: 66px;
       color: #4f78c8;
@@ -287,21 +191,17 @@
       transition: opacity 0.2s ease, transform 0.2s ease;
       z-index: 75;
     }
-
     body.pet-sleep #sleep-z {
       opacity: 0.88;
       transform: translate(0, 0) scale(1);
       animation: sleep-z 2.2s ease-in-out infinite;
     }
-
     @keyframes sleep-z {
-      0%, 100% { transform: translate(0, 3px) scale(0.9); }
+      0%,100% { transform: translate(0, 3px) scale(0.9); }
       50% { transform: translate(4px, -2px) scale(1.08); }
     }
 
-    /* 名字输入弹窗：水平布局输入控件，无任何黑色遮罩背景。
-       窗口固定 260×305：猫(96~224px)，输入框 258px 宽固定在猫正下方（238~290px）水平居中，
-       底部到窗口下沿 15px。 */
+
     #name-dialog {
       position: fixed;
       top: 238px;
@@ -312,15 +212,13 @@
       gap: 6px;
       padding: 6px;
       background: #fff;
-      border: 3px solid #2B2B2B; /* 深灰黑色粗边框 */
+      border: 3px solid #2B2B2B;
       border-radius: 14px;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
       font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       z-index: 200;
     }
-    #name-dialog.open {
-      display: flex;
-    }
+    #name-dialog.open { display: flex; }
     #name-dialog input {
       width: 160px;
       box-sizing: border-box;
@@ -331,12 +229,9 @@
       background: transparent;
       border: none;
       outline: none;
-      caret-color: #333; /* 黑色文本光标 */
+      caret-color: #333;
     }
-    #name-dialog .dialog-buttons {
-      display: flex;
-      gap: 6px;
-    }
+    #name-dialog .dialog-buttons { display: flex; gap: 6px; }
     #name-dialog button {
       width: 34px;
       height: 34px;
@@ -345,7 +240,7 @@
       font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       font-weight: 700;
       color: #fff;
-      background: #111; /* 黑色方形按钮 */
+      background: #111;
       border: none;
       border-radius: 6px;
       cursor: pointer;
@@ -354,12 +249,8 @@
       justify-content: center;
       transition: background 0.15s ease, transform 0.1s ease;
     }
-    #name-dialog button:hover {
-      background: #333;
-    }
-    #name-dialog button:active {
-      transform: scale(0.94);
-    }
+    #name-dialog button:hover { background: #333; }
+    #name-dialog button:active { transform: scale(0.94); }
   </style>
 </head>
 <body>

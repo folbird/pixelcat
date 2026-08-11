@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Water Log</title>
+  <style>
+    @font-face {
+      font-family: "ArkPixel12";
+      src: url("./assets/ark-pixel-12px-proportional-latin.ttf") format("truetype");
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "ArkPixel12CN";
+      src: url("./assets/ark-pixel-12px-proportional-zh_cn.ttf") format("truetype");
+      font-display: swap;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      overflow: hidden;
+      width: 100%;
+      height: 100%;
+      cursor: default;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    /* 黑色主题主体：整体以黑色为主，边框用深灰，只有水的图像是蓝色 */
+    #panel {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      background: rgba(10, 10, 12, 0.97);
+      border: 3px solid #2a2a30;
+      border-radius: 4px;
+      box-shadow: 0 0 0 2px #060608, 0 6px 20px rgba(0, 0, 0, 0.6);
+    }
+    #panel canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+    }
+    /* 右上角 × 关闭按钮：像素风格，与小猫界面字体一致；点击只隐藏面板不关闭应用 */
+    #close {
+      position: absolute;
+      top: 4px;
+      right: 5px;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      font-size: 13px;
+      line-height: 1;
+      color: #a0a0a8;
+      background: #1c1c22;
+      border: 2px solid #3a3a42;
+      border-radius: 3px;
+      cursor: pointer;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: "ArkPixel12CN", "ArkPixel12", Monaco, Menlo, monospace;
+    }
+    #close:hover {
+      background: #2e2e36;
+      color: #e8e8ee;
+    }
+  </style>
+</head>
+<body>
+  <div id="panel">
+    <button id="close" title="关闭喝水记录" aria-label="关闭喝水记录">×</button>
+    <canvas id="c" width="520" height="360"></canvas>
+  </div>
+  <script src="./water-log.js"></script>
+</body>
+</html>

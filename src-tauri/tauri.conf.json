@@ -25,6 +25,20 @@
         "skipTaskbar": true,
         "fullscreen": false,
         "center": true
+      },
+      {
+        "label": "water-log",
+        "title": "",
+        "url": "water-log.html",
+        "width": 520,
+        "height": 360,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {

@@ -460,6 +460,35 @@ fn make_panel_key(state: tauri::State<'_, AppWindow>) {
     }
 }
 
+// 显示/隐藏独立喝水记录面板（第二个 NSPanel：预注册窗口转 panel）。前端通过
+// invoke 调用这两个命令即可打开/关闭大面板，无需抢占小猫主窗口空间。
+#[tauri::command]
+fn show_water_log(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window) = app.get_webview_window("water-log") {
+            if let Ok(panel) = window.to_panel::<BasicPanel>() {
+                panel.show_and_make_key();
+                return Ok(());
+            }
+        }
+    }
+    Err("panel not ready".into())
+}
+
+#[tauri::command]
+fn hide_water_log(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window) = app.get_webview_window("water-log") {
+            if let Ok(panel) = window.to_panel::<BasicPanel>() {
+                panel.hide();
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn set_panel_expanded(
     expanded: bool,
@@ -494,12 +523,28 @@ pub fn run() {
             keep_on_top,
             show_context_menu,
             make_panel_key,
-            set_panel_expanded
+            set_panel_expanded,
+            show_water_log,
+            hide_water_log
         ])
         .on_menu_event(menu_event_handler)
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // 独立喝水记录面板：tauri.conf.json 预注册的透明无边框 water-log 窗口
+            // 在此转成 NSPanel（与 main 同一路径，绝不用 PanelBuilder——它在已有
+            // panel 的应用里创建第二个 panel 会在 did_finish_launching 处 panic）。
+            // 默认隐藏；前端点「喝水提醒」时通过 show_water_log 命令显示。
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app.get_webview_window("water-log") {
+                    make_panel_float_on_top(&window);
+                    if let Ok(panel) = window.to_panel::<BasicPanel>() {
+                        panel.hide();
+                    }
+                }
+            }
 
             if let Some(window) = app.get_webview_window("main") {
                 app.state::<AppWindow>()
