@@ -251,6 +251,68 @@
     }
     #name-dialog button:hover { background: #333; }
     #name-dialog button:active { transform: scale(0.94); }
+
+    /* 小猫选择弹窗：像素风格，中文品种名，7 品种网格 */
+    #cat-dialog {
+      position: fixed;
+      top: 138px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 10px;
+      background: rgba(20, 20, 24, 0.97);
+      border: 3px solid #2B2B2B;
+      border-radius: 10px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      z-index: 210;
+      width: 176px;
+    }
+    #cat-dialog.open { display: flex; }
+    #cat-dialog .cat-title {
+      color: #e6e6ec;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin: 0 0 2px;
+    }
+    #cat-dialog .cat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      width: 100%;
+    }
+    #cat-dialog .cat-grid button {
+      padding: 5px 0;
+      font-size: 12px;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      color: #e6e6ec;
+      background: #2a2a30;
+      border: 2px solid #3a3a42;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    #cat-dialog .cat-grid button:hover { background: #3a3a44; border-color: #7bdfff; }
+    #cat-dialog .cat-grid button.cat-selected {
+      background: #1e4a6b;
+      border-color: #39d9ff;
+    }
+    #cat-dialog .cat-close {
+      width: 100%;
+      padding: 4px 0;
+      font-size: 12px;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      color: #a0a0a8;
+      background: transparent;
+      border: 1px solid #3a3a42;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    #cat-dialog .cat-close:hover { color: #e6e6ec; background: #2e2e36; }
   </style>
 </head>
 <body>
@@ -272,6 +334,14 @@
     </div>
   </div>
 
+  <!-- 小猫选择弹窗（中文）：右键菜单「更换小猫」打开，选择后 localStorage 持久化 -->
+  <div id="cat-dialog">
+    <div class="cat-title">选择你的小猫</div>
+    <div class="cat-grid"></div>
+    <button class="cat-close">关闭</button>
+  </div>
+
+  <script src="./cat-breeds.js"></script>
   <script src="./main.js"></script>
 </body>
 </html>

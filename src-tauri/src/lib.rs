@@ -280,6 +280,7 @@ fn build_context_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>>
     let pomodoro = MenuItem::with_id(app, "pomodoro", "番茄钟", true, None::<&str>)?;
     let stretch = MenuItem::with_id(app, "todo_stretch", "休息拉伸", true, None::<&str>)?;
     let settings = build_settings_submenu(app)?;
+    let choose_cat = MenuItem::with_id(app, "choose_cat", "更换小猫", true, None::<&str>)?;
     let tell_name = MenuItem::with_id(app, "todo_name", "告诉我名字", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "隐藏宠物", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出像素猫", true, None::<&str>)?;
@@ -295,6 +296,7 @@ fn build_context_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>>
             &PredefinedMenuItem::separator(app)?,
             &settings,
             &PredefinedMenuItem::separator(app)?,
+            &choose_cat,
             &tell_name,
             &PredefinedMenuItem::separator(app)?,
             &hide,
@@ -400,6 +402,9 @@ fn menu_event_handler(app: &tauri::AppHandle, event: MenuEvent) {
             let _ = app.emit("open-pomodoro", ());
         }
         "water_reminder" => emit_water_reminder(app),
+        "choose_cat" => {
+            let _ = app.emit("open-cat-dialog", ());
+        }
         "todo_stretch" => {
             let _ = app.emit("stretch-reminder-now", ());
         }

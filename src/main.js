@@ -104,6 +104,8 @@ const HEAT_EYE_RECTS_IDLE = [
 // 离屏缓存：用于把眼睛区域的原猫像素贴回（避免滤镜染色眼睛）。
 let heatScratchCanvas = null;
 let heatScratchCtx = null;
+// 当前品种的眼睛屏幕矩形（drawIdleFrame 每帧更新，applyHeatEffects 用保护）。
+let idleEyeRects = null;
 
 // 瞳孔跟随椭圆约束：瞳孔 9×9 在 16×16 眼白框内，边距 3.5px，
 // 椭圆半径 X=3 / Y=2.5 保证上下眼白不被遮挡，鼠标绕窗时瞳孔沿椭圆轨道环绕。
@@ -146,81 +148,106 @@ const frames = ['./press-left.svg', './press-right.svg'].map((src) => {
   image.src = src;
   return image;
 });
-// Swift 版本 PixelCatRenderer 的 30 x 34 像素猫矩阵。
-// 待机时直接按同样的像素、白色描边和黑色填充绘制，保证视觉一致。
-const IDLE_SPRITE = [
-  '000000004000000000040000000000', '000000044000000000444000000000',
-  '000000444400000000444400000000', '000000444422222222444400000000',
-  '000004422222222222224400000000', '000002222222222222222200000000',
-  '000002222222222222222220000000', '000022222222222222222222000000',
-  '000022225552222226662222000000', '000222258885222268886222000000',
-  '000222258885222268886222200000', '000222258885222268886222200000',
-  '333332225552222226662223333300', '000222222222222222222222200000',
-  '000022222222222222222222000000', '333333222222222222222223333330',
-  '000022222222222222222222000000', '000022222222222222222220000000',
-  '000000222222222222222200000000', '000001122222222222222110000000',
-  '000011111222222222211111000000', '000011111111111111111111000000',
-  '000011111111111111111111000007', '000111111111111111111111100077',
-  '000111111111111111111111100777', '000111111111111111111111100777',
-  '000111111111111111111111100777', '000111111111111111111111100777',
-  '000011111111111111111111007777', '000011111111111111117777777777',
-  '000011111111111111111177777777', '000000111111111111111100777770',
-  '000000001111110111111000007700', '000000000111100011110000000000'
-];
+// 用户可选的 7 种猫咪品种：数据来自 cat-pixel-matrix/（静态 idle 像素矩阵）。
+// 每个品种 = rows（34 行 × 34 列字符矩阵）+ palette（配色表，字符 1-9 → palette[0-8]）。
+// 字符 '0' = 透明；字符 n → palette[n-1] 颜色。由 src/cat-breeds.js 提供 window.CAT_BREEDS。
+const BREED_KEY = 'pixelcat.breed';
+const CAT_BREEDS = window.CAT_BREEDS || {};
+const CAT_BREED_IDS = Object.keys(CAT_BREEDS);
+const CAT_BREED_DEFAULT = CAT_BREED_IDS[0] || 'black-cat';
+
+// 当前品种 id（localStorage 持久化，默认第一个品种）。
+let currentBreed = CAT_BREED_DEFAULT;
+try {
+  const saved = localStorage.getItem(BREED_KEY);
+  if (saved && CAT_BREEDS[saved]) currentBreed = saved;
+} catch { /* localStorage 不可用则用默认 */ }
+
+function getBreedRows() {
+  const b = CAT_BREEDS[currentBreed];
+  return (b && b.rows) ? b.rows : [];
+}
+function getBreedPalette() {
+  const b = CAT_BREEDS[currentBreed];
+  return (b && b.palette) ? b.palette : ['#FFFFFF', '#1C1C1C'];
+}
+function getBreedName() {
+  const b = CAT_BREEDS[currentBreed];
+  return (b && b.name) || currentBreed;
+}
+function setBreed(id) {
+  if (!CAT_BREEDS[id]) return;
+  currentBreed = id;
+  try { localStorage.setItem(BREED_KEY, id); } catch { /* 仅内存生效 */ }
+  if (petState !== 'typing') drawIdleFrame();
+}
 
 function drawIdleFrame() {
+  const rows = getBreedRows();
+  if (rows.length === 0) return;
+  const palette = getBreedPalette();
   const cell = 3;
-  const width = 30 * cell;
-  const height = 34 * cell;
+  const width = rows[0].length * cell;
+  const height = rows.length * cell;
+  // 新矩阵 34×34，画布 128×128 → 猫主体 102×102，垂直居中对齐
   const originX = Math.round((canvas.width - width) / 2);
   const originY = Math.round((canvas.height - height) / 2);
-  const sleeping = petState === 'sleep';
-  const blinking = petState === 'blink' || sleeping;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-  IDLE_SPRITE.forEach((row, y) => {
-    [...row].forEach((code, x) => {
-      // 睡觉时整只猫保持纯黑，不绘制白色外描边。
-      if (code !== '0' && !sleeping) {
-        ctx.fillRect(originX + x * cell - 1, originY + y * cell - 1, cell + 2, cell + 2);
-      }
-    });
-  });
 
-  IDLE_SPRITE.forEach((row, y) => {
-    [...row].forEach((code, x) => {
-      if (code === '0') return;
-      // 眼睛区域（5/6/8）由 drawPixelEyes 统一绘制，避免瞳孔随光标错位散开。
-      if (code === '5' || code === '6' || code === '8') return;
-      ctx.fillStyle = '#111';
+  // 逐像素上色：字符 '0' 透明，字符 n → palette[n-1]。
+  // 新矩阵的白色描边/眼睛/花纹都已在像素里，直接按调色板着色。
+  for (let y = 0; y < rows.length; y++) {
+    const row = rows[y];
+    for (let x = 0; x < row.length; x++) {
+      const code = row.charCodeAt(x) - 48; // '0'=0, '1'=1 ...
+      if (code === 0) continue;
+      const color = palette[code - 1];
+      if (!color) continue;
+      ctx.fillStyle = color;
       ctx.fillRect(originX + x * cell, originY + y * cell, cell, cell);
-    });
-  });
-
-  // 眼睛绘制：睁开 → 4 个白色矩形（上/下/左/右）围框 + 中央黑色瞳孔（整体随 eyeOffset 移动）；
-  // 眨眼/睡觉 → 整眼黑色闭眼（睡觉时加两条细浅横线）。
-  if (sleeping) {
-    ctx.fillStyle = '#111';
-    ctx.fillRect(40, 37, 16, 16);
-    ctx.fillRect(67, 37, 16, 16);
-    ctx.fillStyle = '#f5f5f5';
-    const lineY = originY + 10 * cell + 1;
-    ctx.fillRect(originX + 8 * cell, lineY, 3 * cell, 2);
-    ctx.fillRect(originX + 17 * cell, lineY, 3 * cell, 2);
-  } else if (blinking) {
-    ctx.fillStyle = '#111';
-    ctx.fillRect(40, 37, 16, 16);
-    ctx.fillRect(67, 37, 16, 16);
-  } else {
-    drawPixelEyes();
+    }
   }
 
-  // 打字红温后处理层（仅猫身像素叠加红色）。
+  // ---- 灵动眼睛：盖掉矩阵里的静态眼睛块 ----
+  // 眼睛在 34×36 矩阵中为 3×3 像素（1-indexed：行 11-13，左眼列 9-11，右眼列 18-20）。
+  // 原版观感：白眼球底 + 黑瞳孔，瞳孔随鼠标转动；眨眼=闭眼横线；瞌睡=细眯眼。
+  const LE = { x: originX + 8 * cell, y: originY + 10 * cell, w: 3 * cell, h: 3 * cell };
+  const RE = { x: originX + 17 * cell, y: originY + 10 * cell, w: 3 * cell, h: 3 * cell };
+  idleEyeRects = [LE, RE]; // 供红温保护使用（眼睛不染红）
+  const eyeWhite = palette[0] || '#FFFFFF';
+  const eyeDark = palette[1] || '#1C1C1C';
+  const sleeping = petState === 'sleep';
+  const blinking = petState === 'blink' || sleeping;
+  const ex = Math.round(eyeOffsetX * 0.5); // 瞳孔位移收窄（眼睛只有 3×3，范围 ±1 cell）
+  const ey = Math.round(eyeOffsetY * 0.5);
+  for (const eye of [LE, RE]) {
+    // 白眼球底（盖掉矩阵里的静态深色眼块）
+    ctx.fillStyle = eyeWhite;
+    ctx.fillRect(eye.x, eye.y, eye.w, eye.h);
+    if (sleeping) {
+      // 瞌睡：闭眼 + 细浅横线（眯眼）
+      ctx.fillStyle = eyeDark;
+      ctx.fillRect(eye.x, eye.y + Math.round(eye.h * 0.45), eye.w, Math.max(1, Math.round(cell * 0.66)));
+    } else if (blinking) {
+      // 眨眼：闭眼横线
+      ctx.fillStyle = eyeDark;
+      ctx.fillRect(eye.x, eye.y + Math.round(eye.h * 0.4), eye.w, Math.round(cell * 0.66));
+    } else {
+      // 睁眼：瞳孔 1×1 cell，随 eyeOffsetX/Y 转动（clamp ≤ ±1 cell）
+      const cx = Math.max(-cell, Math.min(cell, ex));
+      const cy = Math.max(-cell, Math.min(cell, ey));
+      ctx.fillStyle = eyeDark;
+      ctx.fillRect(eye.x + cell + cx, eye.y + cell + cy, cell, cell);
+    }
+  }
+
+  // 打字红温后处理层（眼睛区域保护，不染红）。
   applyHeatEffects();
 }
 
 // 像素猫眼睛：4 个白色矩形（上、下、左、右）围框 + 中央黑色瞳孔。
+// 原版 drawPixelEyes 仅打字帧眼睛参考（待机眼睛已由 drawIdleFrame 灵动眼睛替代）。
 // 数据来自 IDLE_SPRITE 30×34 矩阵（cell=3, origin=(19,13)）：
 //   左眼：上白(43,37,9,3) 下白(43,49,9,3) 左竖(40,40,3,9) 右竖(52,40,3,9)，瞳孔(43,40,9,9)
 //   右眼：上白(70,37,9,3) 下白(70,49,9,3) 左竖(67,40,3,9) 右竖(79,40,3,9)，瞳孔(70,40,9,9)
@@ -362,7 +389,10 @@ function applyHeatEffects() {
   ctx.restore();
 
   // 3) 眼睛保护区：把原猫像素贴回眼睛矩形，红色不染眼白与瞳孔。
-  const rects = petState === 'typing' ? HEAT_EYE_RECTS_TYPING : HEAT_EYE_RECTS_IDLE;
+  //    待机 = 当前品种动态眼睛位置（idleEyeRects）；打字 = SVG 眼睛位置常量。
+  const rects = petState === 'typing'
+    ? HEAT_EYE_RECTS_TYPING
+    : (idleEyeRects && idleEyeRects.length ? idleEyeRects : HEAT_EYE_RECTS_IDLE);
   for (const r of rects) {
     ctx.save();
     ctx.beginPath();
@@ -881,6 +911,63 @@ frames.forEach((frame) => {
 drawIdleFrame();
 
 // ============================================================
+// 小猫品种选择（中文弹窗）：右键菜单「更换小猫」→ 打开弹窗 → 点击品种
+// ============================================================
+const catDialog = document.getElementById('cat-dialog');
+const catGrid = catDialog ? catDialog.querySelector('.cat-grid') : null;
+const catCloseBtn = catDialog ? catDialog.querySelector('.cat-close') : null;
+
+function buildCatGrid() {
+  if (!catGrid) return;
+  catGrid.innerHTML = '';
+  for (const id of CAT_BREED_IDS) {
+    const b = CAT_BREEDS[id];
+    if (!b) continue;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = b.name;
+    btn.dataset.breed = id;
+    btn.addEventListener('click', () => {
+      setBreed(id);
+      // 选中态高亮
+      catGrid.querySelectorAll('button').forEach((el) => {
+        el.classList.toggle('cat-selected', el.dataset.breed === id);
+      });
+      closeCatDialog();
+      showToast(`已换成${b.name} 🐱`);
+    });
+    catGrid.appendChild(btn);
+  }
+}
+
+function refreshCatSelection() {
+  if (!catGrid) return;
+  catGrid.querySelectorAll('button').forEach((el) => {
+    el.classList.toggle('cat-selected', el.dataset.breed === currentBreed);
+  });
+}
+
+function openCatDialog() {
+  if (!catDialog) return;
+  buildCatGrid();
+  refreshCatSelection();
+  catDialog.classList.add('open');
+}
+
+function closeCatDialog() {
+  if (!catDialog) return;
+  catDialog.classList.remove('open');
+}
+
+if (catDialog && catCloseBtn) {
+  catCloseBtn.addEventListener('click', closeCatDialog);
+  // 点弹窗外空白处关闭
+  catDialog.addEventListener('click', (e) => {
+    if (e.target === catDialog) closeCatDialog();
+  });
+}
+
+// ============================================================
 // 宠物名字（localStorage 持久化）
 // ============================================================
 const PET_NAME_KEY = 'pixelcat.pet.name';
@@ -1335,6 +1422,10 @@ function init() {
     T.event.listen('open-name-dialog', () => {
       // 点「告诉我名字」菜单项：直接打开名字输入框（无需音效）
       openNameDialog();
+    });
+    // 点「更换小猫」菜单项：打开中文品种选择弹窗
+    T.event.listen('open-cat-dialog', () => {
+      openCatDialog();
     });
   }
 
