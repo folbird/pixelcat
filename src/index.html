@@ -252,17 +252,18 @@
     #name-dialog button:hover { background: #333; }
     #name-dialog button:active { transform: scale(0.94); }
 
-    /* 小猫选择弹窗：像素风格，中文品种名，7 品种网格 */
+    /* 小猫选择弹窗：像素风格，中文品种名，7 品种网格。窗口高 305px，弹窗贴顶显示
+       （盖住小猫也没关系），保证 7 个按钮 + 关闭按钮完整可见。 */
     #cat-dialog {
       position: fixed;
-      top: 138px;
+      top: 6px;
       left: 50%;
       transform: translateX(-50%);
       display: none;
       flex-direction: column;
       align-items: center;
-      gap: 8px;
-      padding: 10px;
+      gap: 5px;
+      padding: 7px;
       background: rgba(20, 20, 24, 0.97);
       border: 3px solid #2B2B2B;
       border-radius: 10px;
@@ -270,24 +271,25 @@
       font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       z-index: 210;
       width: 176px;
+      box-sizing: border-box;
     }
     #cat-dialog.open { display: flex; }
     #cat-dialog .cat-title {
       color: #e6e6ec;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       letter-spacing: 1px;
-      margin: 0 0 2px;
+      margin: 0;
     }
     #cat-dialog .cat-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 5px;
+      gap: 4px;
       width: 100%;
     }
     #cat-dialog .cat-grid button {
-      padding: 5px 0;
-      font-size: 12px;
+      padding: 3px 0;
+      font-size: 11px;
       font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       color: #e6e6ec;
       background: #2a2a30;
@@ -303,8 +305,8 @@
     }
     #cat-dialog .cat-close {
       width: 100%;
-      padding: 4px 0;
-      font-size: 12px;
+      padding: 3px 0;
+      font-size: 11px;
       font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
       color: #a0a0a8;
       background: transparent;

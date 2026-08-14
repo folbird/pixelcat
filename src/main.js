@@ -143,11 +143,37 @@ let eyeOffsetX = 0;
 let eyeOffsetY = 0;
 let typingStateTimer = null;
 let blinkTimer = null;
-const frames = ['./press-left.svg', './press-right.svg'].map((src) => {
-  const image = new Image();
-  image.src = src;
-  return image;
-});
+// 品种动画资源：打字=press-left/right 两张 PNG；喝水/拉伸=9列×4行 sprite sheet。
+const SPRITE_DIR = './cat-sprite-sheets/';
+let frames = [];
+let drinkSpriteSheet = new Image();
+let stretchSpriteSheet = new Image();
+let drinkFrameW = 0, drinkFrameH = 0;
+let stretchFrameW = 0, stretchFrameH = 0;
+
+function loadBreedAnimations() {
+  frames = ['press-left', 'press-right'].map((name) => {
+    const image = new Image();
+    image.src = SPRITE_DIR + currentBreed + '-' + name + '.png';
+    return image;
+  });
+  drinkSpriteSheet = new Image();
+  drinkSpriteSheet.src = SPRITE_DIR + currentBreed + '-drink-sprite.png';
+  drinkSpriteSheet.onload = () => {
+    if (drinkSpriteSheet.naturalWidth > 0) {
+      drinkFrameW = Math.floor(drinkSpriteSheet.naturalWidth / 9);
+      drinkFrameH = Math.floor(drinkSpriteSheet.naturalHeight / 4);
+    }
+  };
+  stretchSpriteSheet = new Image();
+  stretchSpriteSheet.src = SPRITE_DIR + currentBreed + '-stretch-sprite.png';
+  stretchSpriteSheet.onload = () => {
+    if (stretchSpriteSheet.naturalWidth > 0) {
+      stretchFrameW = Math.floor(stretchSpriteSheet.naturalWidth / 9);
+      stretchFrameH = Math.floor(stretchSpriteSheet.naturalHeight / 4);
+    }
+  };
+}
 // 用户可选的 7 种猫咪品种：数据来自 cat-pixel-matrix/（静态 idle 像素矩阵）。
 // 每个品种 = rows（34 行 × 34 列字符矩阵）+ palette（配色表，字符 1-9 → palette[0-8]）。
 // 字符 '0' = 透明；字符 n → palette[n-1] 颜色。由 src/cat-breeds.js 提供 window.CAT_BREEDS。
@@ -162,6 +188,9 @@ try {
   const saved = localStorage.getItem(BREED_KEY);
   if (saved && CAT_BREEDS[saved]) currentBreed = saved;
 } catch { /* localStorage 不可用则用默认 */ }
+
+// currentBreed 就绪后才加载品种动画资源（避免 TDZ ReferenceError）。
+loadBreedAnimations();
 
 function getBreedRows() {
   const b = CAT_BREEDS[currentBreed];
@@ -179,6 +208,7 @@ function setBreed(id) {
   if (!CAT_BREEDS[id]) return;
   currentBreed = id;
   try { localStorage.setItem(BREED_KEY, id); } catch { /* 仅内存生效 */ }
+  loadBreedAnimations(); // 切换品种立刻换全部动画资源
   if (petState !== 'typing') drawIdleFrame();
 }
 
@@ -219,26 +249,34 @@ function drawIdleFrame() {
   const eyeDark = palette[1] || '#1C1C1C';
   const sleeping = petState === 'sleep';
   const blinking = petState === 'blink' || sleeping;
-  const ex = Math.round(eyeOffsetX * 0.5); // 瞳孔位移收窄（眼睛只有 3×3，范围 ±1 cell）
-  const ey = Math.round(eyeOffsetY * 0.5);
+  // 瞳孔 3×3 cell（9×9px = 眼白大小），跟随鼠标偏移 ±1px → 转动时两侧露出眼白边。
+  const ex = Math.max(-1, Math.min(1, Math.round(eyeOffsetX * 0.35)));
+  const ey = Math.max(-1, Math.min(1, Math.round(eyeOffsetY * 0.35)));
+  const pupilW = cell * 3;
+  const pupilH = cell * 3;
   for (const eye of [LE, RE]) {
     // 白眼球底（盖掉矩阵里的静态深色眼块）
     ctx.fillStyle = eyeWhite;
     ctx.fillRect(eye.x, eye.y, eye.w, eye.h);
     if (sleeping) {
-      // 瞌睡：闭眼 + 细浅横线（眯眼）
+      // 瞌睡：眼白也整块变黑（闭眼），中央一条浅色细线（眯眼横线）
       ctx.fillStyle = eyeDark;
+      ctx.fillRect(eye.x, eye.y, eye.w, eye.h);
+      ctx.fillStyle = eyeWhite;
       ctx.fillRect(eye.x, eye.y + Math.round(eye.h * 0.45), eye.w, Math.max(1, Math.round(cell * 0.66)));
     } else if (blinking) {
       // 眨眼：闭眼横线
       ctx.fillStyle = eyeDark;
       ctx.fillRect(eye.x, eye.y + Math.round(eye.h * 0.4), eye.w, Math.round(cell * 0.66));
     } else {
-      // 睁眼：瞳孔 1×1 cell，随 eyeOffsetX/Y 转动（clamp ≤ ±1 cell）
-      const cx = Math.max(-cell, Math.min(cell, ex));
-      const cy = Math.max(-cell, Math.min(cell, ey));
+      // 睁眼：瞳孔 2×2 cell 居中，随鼠标转动（±1px 抖动感）
       ctx.fillStyle = eyeDark;
-      ctx.fillRect(eye.x + cell + cx, eye.y + cell + cy, cell, cell);
+      ctx.fillRect(
+        eye.x + Math.round((eye.w - pupilW) / 2) + ex,
+        eye.y + Math.round((eye.h - pupilH) / 2) + ey,
+        pupilW,
+        pupilH
+      );
     }
   }
 
@@ -731,31 +769,26 @@ function initSoundSystem() {
 // 由 playwright 把 cat-idle-follow-v2.svg 的 drinking CSS 动画逐帧渲染成
 // sprite sheet（9 列 × 4 行，FPS 12，3 秒 36 帧，单帧 257×180，白底已色键转透明）。
 // 喝水提醒/打卡期间按 12fps 播放该序列，展示原版「俯身喝水 + 水碗 + 舌头舔水」。
-const DRINK_SHEET_SRC = './drink-sprite-sheet.png';
 const DRINK_COLS = 9;
 const DRINK_ROWS = 4;
 const DRINK_FRAME_COUNT = 36;
 const DRINK_FPS = 12;
 const DRINK_FRAME_MS = 1000 / DRINK_FPS;
-const drinkSpriteSheet = new Image();
-drinkSpriteSheet.src = DRINK_SHEET_SRC;
 let drinkFrameIndex = 0;   // 当前喝水帧 0~35
 let drinkPhase = null;     // 'animating' 播放中 / null 停
-
-const DRINK_FRAME_W = 277;
-const DRINK_FRAME_H = 191;
 function drawDrinkFrame() {
+  if (!drinkSpriteSheet.complete || drinkFrameW === 0) return;
   const i = drinkFrameIndex % DRINK_FRAME_COUNT;
-  const sx = (i % DRINK_COLS) * DRINK_FRAME_W;
-  const sy = Math.floor(i / DRINK_COLS) * DRINK_FRAME_H;
+  const sx = (i % DRINK_COLS) * drinkFrameW;
+  const sy = Math.floor(i / DRINK_COLS) * drinkFrameH;
   // 整帧清空后绘制：喝水动画期间 canvas 上只有喝水动画，没有原先小猫
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // 源帧 277×191 → 等比缩放到 128×128 canvas 内（128/277≈0.46，垂直居中，不变形不裁剪）
-  const dh = DRINK_FRAME_H * (canvas.width / DRINK_FRAME_W);
+  // 按品种帧实际宽高等比缩放到 128×128 canvas 内（垂直居中）
+  const dh = drinkFrameH * (canvas.width / drinkFrameW);
   const dy = Math.round((canvas.height - dh) / 2);
   ctx.drawImage(
     drinkSpriteSheet,
-    sx, sy, DRINK_FRAME_W, DRINK_FRAME_H,
+    sx, sy, drinkFrameW, drinkFrameH,
     0, dy, canvas.width, dh
   );
   // 红温后处理（猫身变红，眼睛保护区不染）
@@ -796,31 +829,27 @@ function stopDrinkAnimation() {
 // ---- 拉伸动画（stretch-sprite-sheet.png：原版 stretch 动画 36 帧序列帧）----
 // 与喝水动画同架构：拉伸提醒期间小猫消失，12fps 播放 36 帧；播完**停在最后一帧**
 // （不循环），保持到提醒窗口结束再由 stopStretchAnimation 恢复小猫。
-const STRETCH_SHEET_SRC = './stretch-sprite-sheet.png';
 const STRETCH_COLS = 9;
 const STRETCH_ROWS = 4;
 const STRETCH_FRAME_COUNT = 36;
 const STRETCH_FPS = 12;
 const STRETCH_FRAME_MS = 1000 / STRETCH_FPS;
-const STRETCH_FRAME_W = 427;
-const STRETCH_FRAME_H = 279;
-const stretchSpriteSheet = new Image();
-stretchSpriteSheet.src = STRETCH_SHEET_SRC;
 let stretchFrameIndex = 0;   // 当前拉伸帧 0~35
 let stretchPhase = null;     // 'animating' 播放中 / 'finished' 停在最后一帧 / null 停
 
 function drawStretchFrame() {
+  if (!stretchSpriteSheet.complete || stretchFrameW === 0) return;
   const i = stretchFrameIndex % STRETCH_FRAME_COUNT;
-  const sx = (i % STRETCH_COLS) * STRETCH_FRAME_W;
-  const sy = Math.floor(i / STRETCH_COLS) * STRETCH_FRAME_H;
+  const sx = (i % STRETCH_COLS) * stretchFrameW;
+  const sy = Math.floor(i / STRETCH_COLS) * stretchFrameH;
   // 整帧清空后绘制：拉伸动画期间 canvas 上只有拉伸动画，没有原先小猫
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // 源帧 427×279 → 等比缩放到 128×128 canvas 内（128/427≈0.3，垂直居中，不变形不裁剪）
-  const dh = STRETCH_FRAME_H * (canvas.width / STRETCH_FRAME_W);
+  // 按品种帧实际宽高等比缩放到 128×128 canvas 内（垂直居中）
+  const dh = stretchFrameH * (canvas.width / stretchFrameW);
   const dy = Math.round((canvas.height - dh) / 2);
   ctx.drawImage(
     stretchSpriteSheet,
-    sx, sy, STRETCH_FRAME_W, STRETCH_FRAME_H,
+    sx, sy, stretchFrameW, stretchFrameH,
     0, dy, canvas.width, dh
   );
   // 红温后处理（猫身变红，眼睛保护区不染）
