@@ -10,6 +10,9 @@ use tauri::menu::CheckMenuItem;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, LogicalSize, Manager, Size, WebviewWindow};
+
+// macOS 专属：NSPanel 相关
+#[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, PanelLevel, StyleMask, WebviewWindowExt};
 
 struct AppWindow(Mutex<Option<WebviewWindow>>);
@@ -36,6 +39,7 @@ const WINDOW_HEIGHT: f64 = 305.0;
 const LAUNCH_AGENT_LABEL: &str = "com.jun.desktop-pet";
 const LAUNCH_AGENT_FILENAME: &str = "com.jun.desktop-pet.plist";
 
+#[cfg(target_os = "macos")]
 tauri_panel! {
     panel!(BasicPanel {
         config: {
@@ -465,7 +469,7 @@ fn make_panel_key(state: tauri::State<'_, AppWindow>) {
     }
 }
 
-// 显示/隐藏独立喝水记录面板（第二个 NSPanel：预注册窗口转 panel）。前端通过
+// 显示/隐藏独立喝水记录面板（macOS 上用 NSPanel，其他平台直接显示窗口）。前端通过
 // invoke 调用这两个命令即可打开/关闭大面板，无需抢占小猫主窗口空间。
 #[tauri::command]
 fn show_water_log(app: tauri::AppHandle) -> Result<(), String> {
@@ -476,6 +480,15 @@ fn show_water_log(app: tauri::AppHandle) -> Result<(), String> {
                 panel.show_and_make_key();
                 return Ok(());
             }
+        }
+    }
+    // Windows/Linux：直接显示窗口
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(window) = app.get_webview_window("water-log") {
+            let _ = window.show();
+            let _ = window.set_focus();
+            return Ok(());
         }
     }
     Err("panel not ready".into())
@@ -489,6 +502,13 @@ fn hide_water_log(app: tauri::AppHandle) -> Result<(), String> {
             if let Ok(panel) = window.to_panel::<BasicPanel>() {
                 panel.hide();
             }
+        }
+    }
+    // Windows/Linux：直接隐藏窗口
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(window) = app.get_webview_window("water-log") {
+            let _ = window.hide();
         }
     }
     Ok(())
@@ -517,8 +537,15 @@ fn set_panel_expanded(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_nspanel::init())
+    let mut builder = tauri::Builder::default();
+
+    // macOS 专属：NSPanel 插件（全屏覆盖）
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .manage(AppWindow(Mutex::new(None)))
         .manage(PanelExpanded(Mutex::new(false)))
         .manage(AlwaysOnTop(Mutex::new(true)))
