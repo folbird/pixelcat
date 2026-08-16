@@ -2554,6 +2554,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixcat"
+version = "0.1.0"
+dependencies = [
+ "keytap",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-nspanel",
+ "tauri-plugin-opener",
+ "windows-sys 0.59.0",
+ "winreg 0.52.0",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3459,24 +3477,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.0"
-dependencies = [
- "keytap",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-nspanel",
- "tauri-plugin-opener",
- "windows-sys 0.59.0",
- "winreg 0.52.0",
 ]
 
 [[package]]

@@ -1,12 +1,12 @@
 [package]
-name = "tauri-app"
+name = "pixcat"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "PixCat - 像素猫桌面宠物"
+authors = ["jun"]
 edition = "2021"
 
 [lib]
-name = "tauri_app_lib"
+name = "pixcat_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
