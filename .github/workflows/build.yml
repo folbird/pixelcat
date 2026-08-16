@@ -34,13 +34,23 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Tauri app (debug output)
+        run: npm run tauri build 2>&1
+
+      - name: Upload macOS artifacts
+        if: matrix.platform == 'macos-latest' && success()
+        uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: '像素猫 v__VERSION__'
-          releaseBody: '自动构建的跨平台发布版本'
-          releaseDraft: true
-          prerelease: false
+          name: desktop-pet-macos
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app
+
+      - name: Upload Windows artifacts
+        if: matrix.platform == 'windows-latest' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-pet-windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
