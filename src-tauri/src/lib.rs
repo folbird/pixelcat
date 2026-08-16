@@ -3,8 +3,8 @@ use keytap::{EventKind, Tap};
 use std::ffi::c_void;
 #[cfg(target_os = "macos")]
 use std::ptr;
-#[cfg(target_os = "macos")]
 use std::sync::Mutex;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 use tauri::menu::CheckMenuItem;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -456,6 +456,8 @@ fn keep_on_top(state: tauri::State<'_, AppWindow>) {
     if let Some(ref window) = *state.0.lock().unwrap() {
         make_panel_float_on_top(window);
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = state;
 }
 
 /// JS 调用：让 panel 成为 key window，使 WebView 能接收鼠标点击。
@@ -467,6 +469,8 @@ fn make_panel_key(state: tauri::State<'_, AppWindow>) {
             panel.make_key_window();
         }
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = state;
 }
 
 // 显示/隐藏独立喝水记录面板（macOS 上用 NSPanel，其他平台直接显示窗口）。前端通过
