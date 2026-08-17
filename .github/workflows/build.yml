@@ -35,7 +35,17 @@ jobs:
         run: npm install
 
       - name: Build Tauri app (debug output)
-        run: npm run tauri build 2>&1
+        id: build
+        run: |
+          npm run tauri build 2>&1 | tee build-log.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload build log on failure
+        if: always() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.platform }}
+          path: build-log.txt
 
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest' && success()

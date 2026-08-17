@@ -150,7 +150,8 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
 #[cfg(windows)]
 fn start_refresh_loop(app_handle: tauri::AppHandle) {
     use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetAsyncKeyState, GetCursorPos};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
@@ -166,8 +167,9 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
                     if ok == 0 {
                         return;
                     }
-                    // 左键是否按下（VK_LBUTTON = 0x01）：拖动时同步"仍在拖拽"
-                    let left_down = unsafe { GetAsyncKeyState(0x01) } & 0x8000 != 0;
+                    // 左键是否按下（VK_LBUTTON = 0x01）：拖动时同步"仍在拖拽"。
+                    // GetAsyncKeyState 返回 i16，0x8000 也按 i16 比较高位。
+                    let left_down = (unsafe { GetAsyncKeyState(0x01) } & 0x8000i16) != 0;
 
                     if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size())
                     {

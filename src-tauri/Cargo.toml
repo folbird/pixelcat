@@ -31,6 +31,7 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.
 winreg = "0.52"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Foundation",
 ] }
 
