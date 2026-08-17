@@ -73,7 +73,12 @@ jobs:
       - name: Ensure Windows exe exists
         if: matrix.platform == 'windows-latest' && success()
         shell: bash
-        run: test -n "$(ls src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null)" && echo "OK Windows 产物存在"
+        run: |
+          echo "=== 完整 release 目录树 ==="
+          find src-tauri/target/release/bundle -type f | head -50 || echo "(无 bundle)"
+          echo "=== nsis 目录 ==="
+          ls -la src-tauri/target/release/bundle/nsis/ 2>&1 || echo "(无 nsis 目录)"
+          test -n "$(ls src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null)" && echo "OK Windows 产物存在"
 
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest' && success()
