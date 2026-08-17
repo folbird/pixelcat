@@ -85,7 +85,16 @@ const HEAT_RATE_MAX = 9;          // 达到每秒 9 键时红色最浓（满红�
 const HEAT_MAX = 100;             // 红温强度上限（满=完全红温）
 // 满热度时红色叠加的最大不透明度（source-atop 只作用于猫身像素，透明区不受影响）
 const HEAT_MAX_ALPHA = 0.55;
-let petHeat = 0;                  // 当前红温强度 0~100（由敲击速率映射）
+// 红温平滑渐变：petHeat 每帧向 targetHeat 缓慢逼近（lerp），
+// 让红温「慢慢变红、慢慢消退」，避免速率突变导致的突兀跳变。
+const HEAT_SMOOTH_UP = 0.06;      // 升温逼近系数（越小越慢，约 1.5s 到顶）
+const HEAT_SMOOTH_DOWN = 0.04;    // 降温逼近系数（比升温更慢，消退更柔和）
+// 红温颜色渐变：热度 0→100 从淡橙 → 橙红 → 深红，比单一红色更有层次。
+const HEAT_COLOR_START = { r: 255, g: 150, b: 60 };   // 淡橙（低热度）
+const HEAT_COLOR_MID   = { r: 235, g: 50,  b: 35 };   // 橙红（中热度）
+const HEAT_COLOR_END   = { r: 180, g: 20,  b: 20 };   // 深红（满热度）
+let petHeat = 0;                  // 当前红温强度 0~100（平滑渐变后的显示值）
+let targetHeat = 0;               // 目标红温强度（由敲击速率映射，petHeat 向其逼近）
 let keyTimes = [];                // 最近敲击时间戳（滑动窗口统计速率）
 
 // 眼睛保护区（canvas 128×128 坐标）：红色滤镜不染眼白与瞳孔，外围黑毛要吃到红。
@@ -384,8 +393,10 @@ function handleTyping() {
 }
 
 // ---- 打字红温实现 ----
-// 由滑动窗口打字速率计算红温强度：速率 ≤ 阈值 → 0（完全不红）；
+// 由滑动窗口打字速率计算「目标红温强度」：速率 ≤ 阈值 → 0（完全不红）；
 // 速率达到 HEAT_RATE_MAX → 100（满红温）；之间线性渐变。
+// 关键：速率只更新 targetHeat，petHeat 每帧向 targetHeat 缓慢逼近（lerp），
+// 让红温「慢慢变红、慢慢消退」，避免速率突变导致的突兀跳变。
 function updateHeat() {
   const now = Date.now();
   // 清理窗口外的旧敲击记录。
@@ -394,17 +405,24 @@ function updateHeat() {
   }
   const rate = keyTimes.length; // 最近 1 秒内的敲击次数 = 每秒速率
   if (rate <= HEAT_RATE_THRESHOLD) {
-    petHeat = 0;
+    targetHeat = 0;
   } else {
-    petHeat = Math.min(
+    targetHeat = Math.min(
       HEAT_MAX,
       ((rate - HEAT_RATE_THRESHOLD) / (HEAT_RATE_MAX - HEAT_RATE_THRESHOLD)) * HEAT_MAX
     );
   }
+  // petHeat 向 targetHeat 平滑逼近：升温用 HEAT_SMOOTH_UP，降温用 HEAT_SMOOTH_DOWN。
+  // 每帧（heatLoop 100ms）逼近一次，系数越小过渡越慢越柔和。
+  const smooth = targetHeat > petHeat ? HEAT_SMOOTH_UP : HEAT_SMOOTH_DOWN;
+  petHeat += (targetHeat - petHeat) * smooth;
+  // 收敛到极小值时归零（避免残留极淡的红色）。
+  if (petHeat < 0.5) petHeat = 0;
 }
 
 // 把当前红温强度映射到画面后处理：仅猫身像素叠加红色，眼睛（眼白+瞳孔）保持原色。
 // 速率 ≤ 阈值时 petHeat=0 完全不渲染；超过后红色从 0 平滑渐显，满强度达到 HEAT_MAX_ALPHA。
+// 颜色随热度渐变：低热度淡橙 → 中热度橙红 → 满热度深红，比单一红色更有层次。
 function applyHeatEffects() {
   const heatAlpha = petHeat > 0 ? (petHeat / HEAT_MAX) * HEAT_MAX_ALPHA : 0;
   if (heatAlpha <= 0) return;
@@ -420,9 +438,23 @@ function applyHeatEffects() {
   heatScratchCtx.drawImage(canvas, 0, 0);
 
   // 2) 叠加打字红温（仅猫身像素叠加红色，眼睛保护区贴回原像素）。
+  //    颜色按热度分段插值：0~50 淡橙→橙红，50~100 橙红→深红。
+  const t = petHeat / HEAT_MAX; // 0~1
+  let r, g, b;
+  if (t <= 0.5) {
+    const k = t / 0.5; // 0~1（前半段）
+    r = HEAT_COLOR_START.r + (HEAT_COLOR_MID.r - HEAT_COLOR_START.r) * k;
+    g = HEAT_COLOR_START.g + (HEAT_COLOR_MID.g - HEAT_COLOR_START.g) * k;
+    b = HEAT_COLOR_START.b + (HEAT_COLOR_MID.b - HEAT_COLOR_START.b) * k;
+  } else {
+    const k = (t - 0.5) / 0.5; // 0~1（后半段）
+    r = HEAT_COLOR_MID.r + (HEAT_COLOR_END.r - HEAT_COLOR_MID.r) * k;
+    g = HEAT_COLOR_MID.g + (HEAT_COLOR_END.g - HEAT_COLOR_MID.g) * k;
+    b = HEAT_COLOR_MID.b + (HEAT_COLOR_END.b - HEAT_COLOR_MID.b) * k;
+  }
   ctx.save();
   ctx.globalCompositeOperation = 'source-atop';
-  ctx.fillStyle = `rgba(235, 50, 35, ${heatAlpha.toFixed(3)})`;
+  ctx.fillStyle = `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${heatAlpha.toFixed(3)})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
 
