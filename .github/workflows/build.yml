@@ -74,11 +74,21 @@ jobs:
         if: matrix.platform == 'windows-latest' && success()
         shell: bash
         run: |
-          echo "=== 完整 release 目录树 ==="
-          find src-tauri/target/release/bundle -type f | head -50 || echo "(无 bundle)"
-          echo "=== nsis 目录 ==="
-          ls -la src-tauri/target/release/bundle/nsis/ 2>&1 || echo "(无 nsis 目录)"
-          test -n "$(ls src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null)" && echo "OK Windows 产物存在"
+          echo "=== 完整 release 目录树 ===" > windows-bundle-debug.txt
+          find src-tauri/target/release -type f 2>&1 | head -80 >> windows-bundle-debug.txt
+          echo "=== bundle 顶层 ===" >> windows-bundle-debug.txt
+          ls -la src-tauri/target/release/bundle/ 2>&1 >> windows-bundle-debug.txt
+          echo "=== find *.exe ===" >> windows-bundle-debug.txt
+          find src-tauri/target/release -name "*.exe" 2>&1 >> windows-bundle-debug.txt
+          cat windows-bundle-debug.txt
+          test -n "$(find src-tauri/target/release -name '*.exe' 2>/dev/null)" && echo "OK Windows 产物存在" || exit 1
+
+      - name: Upload Windows bundle debug
+        if: matrix.platform == 'windows-latest' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundle-debug
+          path: windows-bundle-debug.txt
 
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest' && success()
