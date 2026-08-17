@@ -47,6 +47,24 @@ jobs:
           name: build-log-${{ matrix.platform }}
           path: build-log.txt
 
+      - name: Verify bundle exists (debug)
+        if: success()
+        run: |
+          echo "=== macOS bundles ==="
+          ls -la src-tauri/target/release/bundle/macos/ 2>/dev/null || echo "无 macOS bundle"
+          ls -la src-tauri/target/release/bundle/dmg/ 2>/dev/null || echo "无 dmg"
+          echo "=== Windows bundles ==="
+          ls -la src-tauri/target/release/bundle/nsis/ 2>/dev/null || echo "无 nsis"
+          ls -la src-tauri/target/release/bundle/msi/ 2>/dev/null || echo "无 msi"
+
+      - name: Ensure macOS dmg exists
+        if: matrix.platform == 'macos-latest' && success()
+        run: test -n "$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null)" && echo "OK"
+
+      - name: Ensure Windows exe exists
+        if: matrix.platform == 'windows-latest' && success()
+        run: test -n "$(ls src-tauri/target/release/bundle/nsis/*.exe 2>/dev/null)" && echo "OK"
+
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest' && success()
         uses: actions/upload-artifact@v4
