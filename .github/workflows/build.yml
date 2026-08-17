@@ -80,7 +80,9 @@ jobs:
         shell: bash
         run: |
           echo "=== 完整 release 目录树 ===" > windows-bundle-debug.txt
-          find src-tauri/target/release -type f 2>&1 | head -80 >> windows-bundle-debug.txt
+          # 注意：head 读满 80 行即关闭管道，find 会收到 SIGPIPE（退出码 141），
+          # 在 bash -e -o pipefail 下会导致步骤失败，故加 || true 吞掉该信号。
+          find src-tauri/target/release -type f 2>&1 | head -80 >> windows-bundle-debug.txt || true
           echo "=== bundle 顶层 ===" >> windows-bundle-debug.txt
           ls -la src-tauri/target/release/bundle/ 2>&1 >> windows-bundle-debug.txt
           echo "=== find *.exe ===" >> windows-bundle-debug.txt
