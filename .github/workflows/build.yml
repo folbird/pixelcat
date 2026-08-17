@@ -23,8 +23,14 @@ jobs:
         with:
           node-version: 20
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      # 注意：不使用 dtolnay/rust-toolchain action——它近期被 GitHub codeload 限流(429)，
+      # 导致任务在 Set up job 阶段就失败。改用原生 rustup 命令安装工具链，绕开 action 下载。
+      - name: Setup Rust (rustup)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cargo --version
 
       - name: Setup Rust cache
         uses: swatinem/rust-cache@v2
