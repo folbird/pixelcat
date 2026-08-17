@@ -86,16 +86,21 @@ const HEAT_MAX = 100;             // 红温强度上限（满=完全红温）
 // 满热度时红色叠加的最大不透明度（source-atop 只作用于猫身像素，透明区不受影响）
 const HEAT_MAX_ALPHA = 0.55;
 // 红温平滑渐变：petHeat 每帧向 targetHeat 缓慢逼近（lerp），
-// 让红温「慢慢变红、慢慢消退」，避免速率突变导致的突兀跳变。
+// 让「冒汗」慢慢出现、慢慢消退，避免速率突变导致的突兀跳变。
 const HEAT_SMOOTH_UP = 0.06;      // 升温逼近系数（越小越慢，约 1.5s 到顶）
 const HEAT_SMOOTH_DOWN = 0.04;    // 降温逼近系数（比升温更慢，消退更柔和）
-// 红温颜色渐变：热度 0→100 从淡橙 → 橙红 → 深红，比单一红色更有层次。
-const HEAT_COLOR_START = { r: 255, g: 150, b: 60 };   // 淡橙（低热度）
-const HEAT_COLOR_MID   = { r: 235, g: 50,  b: 35 };   // 橙红（中热度）
-const HEAT_COLOR_END   = { r: 180, g: 20,  b: 20 };   // 深红（满热度）
-let petHeat = 0;                  // 当前红温强度 0~100（平滑渐变后的显示值）
-let targetHeat = 0;               // 目标红温强度（由敲击速率映射，petHeat 向其逼近）
+// 冒汗效果：打字速率快时在小猫头顶出现汗滴（替代原红温染色）。
+// petHeat 0~100 → 汗滴数量 1~3 滴，透明度与大小随热度增大。
+const SWEAT_MAX_DROPS = 3;        // 最多 3 滴汗
+const SWEAT_BASE_X = 52;          // 汗滴中心相对 canvas 的 x 基线（头顶中央）
+const SWEAT_X_GAP = 13;           // 相邻汗滴水平间距
+const SWEAT_Y_TOP = 4;            // 汗滴顶部 y（头顶上方）
+const SWEAT_AMP = 2;              // 汗滴漂浮振幅（px）
+const SWEAT_WAVE = 900;           // 汗滴浮动周期（ms）
+let petHeat = 0;                  // 当前热度 0~100（平滑渐变后的显示值）
+let targetHeat = 0;               // 目标热度（由敲击速率映射，petHeat 向其逼近）
 let keyTimes = [];                // 最近敲击时间戳（滑动窗口统计速率）
+let sweatT = 0;                   // 汗滴动画相位（随 heatLoop 推进，驱动上下浮动）
 
 // 眼睛保护区（canvas 128×128 坐标）：红色滤镜不染眼白与瞳孔，外围黑毛要吃到红。
 // 打字帧(press-left/right.svg，viewBox -2~48，缩放 128/50=2.56，偏移 +2×2.56=+5.12)：
@@ -263,22 +268,32 @@ function drawIdleFrame() {
   const ey = Math.max(-1, Math.min(1, Math.round(eyeOffsetY * 0.35)));
   const pupilW = cell * 3;
   const pupilH = cell * 3;
+  // 闭眼时眼睛区域填充的「周围毛色」：取 palette 里第 3 个颜色（多数品种是脸部主毛色），
+  // 若不存在则退化为 palette[1]（身体色）。黑猫 palette=[#FFFFFF,#1C1C1C]，退化为黑色 →
+  // 眼睛区域被黑毛盖住，和脸融为一体。
+  const furColor = palette[2] || palette[1] || eyeDark;
+  // 眨眼时眼睛区域先用毛色填平（盖掉矩阵里的白眼球），再画一条深色闭合横线。
+  // 瞌睡时用毛色填平后画两条淡色细横线（= 表示闭着的眼睛）。
+  // closedLineY1/Y2、lineW 依赖 eye，必须在循环内计算。
   for (const eye of [LE, RE]) {
-    // 白眼球底（盖掉矩阵里的静态深色眼块）
-    ctx.fillStyle = eyeWhite;
-    ctx.fillRect(eye.x, eye.y, eye.w, eye.h);
+    const lineW = Math.max(1, Math.round(cell * 0.66));
     if (sleeping) {
-      // 瞌睡：眼白也整块变黑（闭眼），中央一条浅色细线（眯眼横线）
-      ctx.fillStyle = eyeDark;
-      ctx.fillRect(eye.x, eye.y, eye.w, eye.h);
+      // 瞌睡：先用毛色覆盖「眼白 + 周围白色描边轮廓」整个区域（让眼睛完全融入脸部），
+      // 再每只闭合眼睛中央画一条淡色细横线（左眼一条、右眼一条）。
+      ctx.fillStyle = furColor;
+      ctx.fillRect(eye.x - cell, eye.y - cell, eye.w + cell * 2, eye.h + cell * 2);
       ctx.fillStyle = eyeWhite;
-      ctx.fillRect(eye.x, eye.y + Math.round(eye.h * 0.45), eye.w, Math.max(1, Math.round(cell * 0.66)));
+      ctx.fillRect(eye.x + Math.round(cell * 0.5), eye.y + Math.round(eye.h * 0.45), eye.w - cell, lineW);
     } else if (blinking) {
-      // 眨眼：闭眼横线
+      // 眨眼：同样先盖掉眼白与白色描边，再画一条深色横线。
+      ctx.fillStyle = furColor;
+      ctx.fillRect(eye.x - cell, eye.y - cell, eye.w + cell * 2, eye.h + cell * 2);
       ctx.fillStyle = eyeDark;
-      ctx.fillRect(eye.x, eye.y + Math.round(eye.h * 0.4), eye.w, Math.round(cell * 0.66));
+      ctx.fillRect(eye.x + Math.round(cell * 0.5), eye.y + Math.round(eye.h * 0.45), eye.w - cell, lineW);
     } else {
-      // 睁眼：瞳孔 2×2 cell 居中，随鼠标转动（±1px 抖动感）
+      // 睁眼：白眼球底 + 瞳孔 2×2 cell 居中，随鼠标转动（±1px 抖动感）
+      ctx.fillStyle = eyeWhite;
+      ctx.fillRect(eye.x, eye.y, eye.w, eye.h);
       ctx.fillStyle = eyeDark;
       ctx.fillRect(
         eye.x + Math.round((eye.w - pupilW) / 2) + ex,
@@ -420,69 +435,51 @@ function updateHeat() {
   if (petHeat < 0.5) petHeat = 0;
 }
 
-// 把当前红温强度映射到画面后处理：仅猫身像素叠加红色，眼睛（眼白+瞳孔）保持原色。
-// 速率 ≤ 阈值时 petHeat=0 完全不渲染；超过后红色从 0 平滑渐显，满强度达到 HEAT_MAX_ALPHA。
-// 颜色随热度渐变：低热度淡橙 → 中热度橙红 → 满热度深红，比单一红色更有层次。
+// 把当前热度映射为「头顶冒汗」效果：在 canvas 顶部绘制蓝色汗滴。
+// 速率 ≤ 阈值时 petHeat=0 完全不渲染；超过后汗滴数量/透明度/大小随热度渐变，
+// 逐渐浮现、逐渐消退（由 heatLoop 的 petHeat lerp 保证平滑）。
 function applyHeatEffects() {
-  const heatAlpha = petHeat > 0 ? (petHeat / HEAT_MAX) * HEAT_MAX_ALPHA : 0;
-  if (heatAlpha <= 0) return;
+  if (petHeat <= 0) return;
 
-  // 1) 备份当前干净帧（原猫）。
-  if (!heatScratchCanvas) {
-    heatScratchCanvas = document.createElement('canvas');
-    heatScratchCanvas.width = canvas.width;
-    heatScratchCanvas.height = canvas.height;
-    heatScratchCtx = heatScratchCanvas.getContext('2d');
-  }
-  heatScratchCtx.clearRect(0, 0, canvas.width, canvas.height);
-  heatScratchCtx.drawImage(canvas, 0, 0);
+  // 汗滴数量：0~100 热度 → 0/1/2/3 滴（前 35% 1 滴、70% 2 滴、满 3 滴）
+  const t = Math.min(1, petHeat / HEAT_MAX);
+  const dropCount = t <= 0.35 ? 1 : (t <= 0.7 ? 2 : SWEAT_MAX_DROPS);
+  // 透明度：低热度淡、满热度实（汗滴是半透明水珠，不像红温那么浓）
+  const alpha = 0.35 + 0.5 * t;
+  const phase = (performance.now() / SWEAT_WAVE) * Math.PI * 2;
 
-  // 2) 叠加打字红温（仅猫身像素叠加红色，眼睛保护区贴回原像素）。
-  //    颜色按热度分段插值：0~50 淡橙→橙红，50~100 橙红→深红。
-  const t = petHeat / HEAT_MAX; // 0~1
-  let r, g, b;
-  if (t <= 0.5) {
-    const k = t / 0.5; // 0~1（前半段）
-    r = HEAT_COLOR_START.r + (HEAT_COLOR_MID.r - HEAT_COLOR_START.r) * k;
-    g = HEAT_COLOR_START.g + (HEAT_COLOR_MID.g - HEAT_COLOR_START.g) * k;
-    b = HEAT_COLOR_START.b + (HEAT_COLOR_MID.b - HEAT_COLOR_START.b) * k;
-  } else {
-    const k = (t - 0.5) / 0.5; // 0~1（后半段）
-    r = HEAT_COLOR_MID.r + (HEAT_COLOR_END.r - HEAT_COLOR_MID.r) * k;
-    g = HEAT_COLOR_MID.g + (HEAT_COLOR_END.g - HEAT_COLOR_MID.g) * k;
-    b = HEAT_COLOR_MID.b + (HEAT_COLOR_END.b - HEAT_COLOR_MID.b) * k;
-  }
-  ctx.save();
-  ctx.globalCompositeOperation = 'source-atop';
-  ctx.fillStyle = `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${heatAlpha.toFixed(3)})`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.restore();
+  // 汗滴大小随热度：满热度时稍大
+  const radius = 3.5 + 1.2 * t;
 
-  // 3) 眼睛保护区：把原猫像素贴回眼睛矩形，红色不染眼白与瞳孔。
-  //    待机 = 当前品种动态眼睛位置（idleEyeRects）；打字 = SVG 眼睛位置常量。
-  const rects = petState === 'typing'
-    ? HEAT_EYE_RECTS_TYPING
-    : (idleEyeRects && idleEyeRects.length ? idleEyeRects : HEAT_EYE_RECTS_IDLE);
-  for (const r of rects) {
+  for (let i = 0; i < dropCount; i++) {
+    // 汗滴沿头顶水平分布，居中偏右（避开猫耳朵），上下轻微浮动模拟「鼓出」的汗珠
+    const cx = SWEAT_BASE_X + (i - (dropCount - 1) / 2) * SWEAT_X_GAP;
+    const bob = Math.sin(phase + i * 1.3) * SWEAT_AMP;
+    const cy = SWEAT_Y_TOP + radius + bob;
+
+    // 汗滴本体：天蓝色半透明，圆形
     ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#7EC8FF';
     ctx.beginPath();
-    ctx.rect(r.x, r.y, r.w, r.h);
-    ctx.clip();
-    ctx.drawImage(
-      heatScratchCanvas,
-      0, 0, canvas.width, canvas.height,
-      0, 0, canvas.width, canvas.height
-    );
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
+    // 高光：左上一小块白色，增强水珠立体感
+    ctx.globalAlpha = Math.min(1, alpha * 0.9);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(cx - radius * 0.35, cy - radius * 0.35, radius * 0.3, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   }
 }
 
-// 热度主循环：冷却 + 有热度时重绘当前帧（红色叠加随热度平滑变化）。
+// 热度主循环：冷却 + 有热度时重绘当前帧（冒汗随热度平滑渐变）。
 // 喝水动画播放期间：保持喝水帧（heatLoop 不覆盖喝水帧内容）。
 function heatLoop() {
   updateHeat();
   if (isOverlayActive()) {
-    // 覆盖动画期间：只重绘红温后处理，不重画帧
+    // 覆盖动画期间：只重绘冒汗，不重画帧
     if (petHeat > 0) redrawOverlay();
     return;
   }

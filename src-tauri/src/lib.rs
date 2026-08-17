@@ -144,6 +144,53 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
     });
 }
 
+// ========== Windows 光标轮询（驱动眼睛转动 + 身体形变） ==========
+// macOS 用 CoreGraphics 每 16ms 读一次光标并 emit "cursor-position"；
+// Windows 用 GetCursorPos + GetAsyncKeyState 实现同样的 cursor-position 事件流，
+// 否则前端 handleCursorPosition 收不到事件 → 眼睛不转、身体不动。
+#[cfg(windows)]
+fn start_refresh_loop(app_handle: tauri::AppHandle) {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetAsyncKeyState, GetCursorPos};
+
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        loop {
+            // ~60fps（16ms）：与 macOS 版一致，给果冻拖拽平滑的光标速度流。
+            std::thread::sleep(Duration::from_millis(16));
+            let h = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                if let Some(window) = h.get_webview_window("main") {
+                    // 读取屏幕光标位置（物理像素）
+                    let mut point = POINT { x: 0, y: 0 };
+                    let ok = unsafe { GetCursorPos(&mut point) };
+                    if ok == 0 {
+                        return;
+                    }
+                    // 左键是否按下（VK_LBUTTON = 0x01）：拖动时同步"仍在拖拽"
+                    let left_down = unsafe { GetAsyncKeyState(0x01) } & 0x8000 != 0;
+
+                    if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size())
+                    {
+                        let center_x = position.x as f64 + size.width as f64 / 2.0;
+                        let center_y = position.y as f64 + size.height as f64 / 2.0;
+                        let _ = h.emit(
+                            "cursor-position",
+                            serde_json::json!({
+                                "x": point.x as f64,
+                                "y": point.y as f64,
+                                "dx": point.x as f64 - center_x,
+                                "dy": point.y as f64 - center_y,
+                                "down": left_down
+                            }),
+                        );
+                    }
+                }
+            });
+        }
+    });
+}
+
 // ============================================================
 // 开机自启（macOS LaunchAgent）
 // ============================================================
@@ -597,7 +644,8 @@ pub fn run() {
                     panel.show_and_make_key();
                 }
 
-                #[cfg(target_os = "macos")]
+                // 光标轮询：macOS 用 CoreGraphics、Windows 用 GetCursorPos，
+                // 都推送 cursor-position 事件驱动眼睛转动 + 身体形变。
                 start_refresh_loop(app.handle().clone());
 
                 // 初始窗口 = 固定 260×305，启动后永不 resize/移动。
