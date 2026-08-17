@@ -34,8 +34,10 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const WINDOW_WIDTH: f64 = 260.0;
 const WINDOW_HEIGHT: f64 = 305.0;
 
-// macOS LaunchAgent 文件名：com.comnyang.app.plist
+// macOS LaunchAgent 文件名：com.comnyang.app.plist（仅 macOS 用）
+#[cfg(target_os = "macos")]
 const LAUNCH_AGENT_LABEL: &str = "com.comnyang.app";
+#[cfg(target_os = "macos")]
 const LAUNCH_AGENT_FILENAME: &str = "com.comnyang.app.plist";
 
 #[cfg(target_os = "macos")]
@@ -168,8 +170,9 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
                         return;
                     }
                     // 左键是否按下（VK_LBUTTON = 0x01）：拖动时同步"仍在拖拽"。
-                    // GetAsyncKeyState 返回 i16，0x8000 也按 i16 比较高位。
-                    let left_down = (unsafe { GetAsyncKeyState(0x01) } & 0x8000i16) != 0;
+                    // GetAsyncKeyState 返回 i16，用 i16::MIN（=-32768，即 0x8000 高位）
+                    // 检测最高位是否为 1（键被按下）；0x8000i16 字面量会溢出，不能用。
+                    let left_down = (unsafe { GetAsyncKeyState(0x01) } & i16::MIN) != 0;
 
                     if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size())
                     {
@@ -589,6 +592,9 @@ fn set_panel_expanded(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // macOS 需要 builder 可变（注册 NSPanel 插件）；Windows/Linux 上不用可变。
+    // 用 cfg_attr 消除非 macOS 的 unused_mut 警告又不影响 macOS 的可变需求。
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = tauri::Builder::default();
 
     // macOS 专属：NSPanel 插件（全屏覆盖）
