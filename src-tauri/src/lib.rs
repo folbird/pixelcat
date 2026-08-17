@@ -4,8 +4,7 @@ use std::ffi::c_void;
 #[cfg(target_os = "macos")]
 use std::ptr;
 use std::sync::Mutex;
-#[cfg(target_os = "macos")]
-use std::time::Duration;
+use std::time::Duration; // macOS/Windows 的 start_refresh_loop 都用它 sleep 光标轮询
 use tauri::menu::CheckMenuItem;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
