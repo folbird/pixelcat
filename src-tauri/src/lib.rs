@@ -35,9 +35,9 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const WINDOW_WIDTH: f64 = 260.0;
 const WINDOW_HEIGHT: f64 = 305.0;
 
-// macOS LaunchAgent 文件名：com.pixcat.app.plist
-const LAUNCH_AGENT_LABEL: &str = "com.pixcat.app";
-const LAUNCH_AGENT_FILENAME: &str = "com.pixcat.app.plist";
+// macOS LaunchAgent 文件名：com.comnyang.app.plist
+const LAUNCH_AGENT_LABEL: &str = "com.comnyang.app";
+const LAUNCH_AGENT_FILENAME: &str = "com.comnyang.app.plist";
 
 #[cfg(target_os = "macos")]
 tauri_panel! {
@@ -276,7 +276,7 @@ fn build_context_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>>
     let title = MenuItem::with_id(
         app,
         "title",
-        format!("PixCat 像素猫 v{}", APP_VERSION),
+        format!("Comnyang 像素猫 v{}", APP_VERSION),
         false,
         None::<&str>,
     )?;
@@ -315,7 +315,7 @@ fn build_tray_menu(
     let title = MenuItem::with_id(
         app,
         "title",
-        format!("PixCat 像素猫 v{}", APP_VERSION),
+        format!("Comnyang 像素猫 v{}", APP_VERSION),
         false,
         None::<&str>,
     )?;
@@ -616,7 +616,7 @@ pub fn run() {
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().cloned().expect("no window icon"))
                 .icon_as_template(true)
-                .tooltip(format!("PixCat 像素猫 v{}", APP_VERSION))
+                .tooltip(format!("Comnyang 像素猫 v{}", APP_VERSION))
 
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)

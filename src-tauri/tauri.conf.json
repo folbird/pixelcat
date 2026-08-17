@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PixCat",
+  "productName": "Comnyang",
   "version": "0.1.0",
-  "identifier": "com.pixcat.app",
+  "identifier": "com.comnyang.app",
   "build": {
     "frontendDist": "../src",
     "beforeDevCommand": "",

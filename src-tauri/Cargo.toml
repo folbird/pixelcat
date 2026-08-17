@@ -1,12 +1,12 @@
 [package]
-name = "pixcat"
+name = "comnyang"
 version = "0.1.0"
-description = "PixCat - 像素猫桌面宠物"
+description = "Comnyang - 像素猫桌面宠物"
 authors = ["jun"]
 edition = "2021"
 
 [lib]
-name = "pixcat_lib"
+name = "comnyang_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

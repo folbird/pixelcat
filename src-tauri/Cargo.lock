@@ -494,6 +494,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "comnyang"
+version = "0.1.0"
+dependencies = [
+ "keytap",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-nspanel",
+ "tauri-plugin-opener",
+ "windows-sys 0.59.0",
+ "winreg 0.52.0",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2551,24 +2569,6 @@ dependencies = [
  "atomic-waker",
  "fastrand",
  "futures-io",
-]
-
-[[package]]
-name = "pixcat"
-version = "0.1.0"
-dependencies = [
- "keytap",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-nspanel",
- "tauri-plugin-opener",
- "windows-sys 0.59.0",
- "winreg 0.52.0",
 ]
 
 [[package]]
