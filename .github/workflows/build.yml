@@ -43,8 +43,13 @@ jobs:
       - name: Build Tauri app (debug output)
         id: build
         run: |
-          npm run tauri build 2>&1 | tee build-log.txt
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            npm run tauri build -- --bundles nsis 2>&1 | tee build-log.txt
+          else
+            npm run tauri build 2>&1 | tee build-log.txt
+          fi
           exit ${PIPESTATUS[0]}
+        shell: bash
 
       - name: Upload build log on failure
         if: always() && steps.build.outcome == 'failure'
