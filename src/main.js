@@ -6,14 +6,14 @@
 const FRAME_W = 128;
 const FRAME_H = 128;
 const SCALE = 1;
-const WATER_REMINDER_INTERVAL = 45 * 60 * 1000;
+let WATER_REMINDER_INTERVAL = 45 * 60 * 1000;
 const WATER_REMINDER_VISIBLE_MS = 8000;
 const TYPING_VISIBLE_MS = 360;
 // ---- 喝水提醒（轻量优化：智能调度 + 点击打卡 + 进度水色 + 目标庆祝）----
 const WATER_ACTIVE_START_HOUR = 8;     // 活跃提醒时段 08:00 开始
 const WATER_ACTIVE_END_HOUR = 23;      // 23:00 结束（避免深夜打扰）
 const WATER_COOLDOWN_MS = 20 * 60 * 1000; // 刚喝过 20 分钟内不自动打扰
-const WATER_DRINK_ML = 200;            // 每次点击猫 = 喝 200ml
+let WATER_DRINK_ML = 200;            // 每次点击猫 = 喝 200ml（右键菜单可设置）
 const WATER_DAILY_GOAL_ML = 2000;      // 每日目标 2000ml
 const WATER_URGENT_MS = 90 * 60 * 1000; // 超过 90 分钟未喝 → 加强提醒
 const WATER_STATE_KEY = 'pixelcat.water';
@@ -25,7 +25,7 @@ let waterState = { date: '', drunkML: 0, lastDrinkAt: 0, celebrated: false, log:
 let waterReminderTimer = null;
 let waterReminderRestoreTimer = null;
 const SLEEP_AFTER_IDLE_MS = 30 * 1000;
-const STRETCH_INTERVAL = 60 * 60 * 1000; // 每小时提醒一次休息拉伸
+let STRETCH_INTERVAL = 60 * 60 * 1000; // 每小时提醒一次休息拉伸（右键菜单可设置）
 
 // ---- 方向感知拖拽系统（手动拖动窗口 + rAF 实时形变）----
 // 不用原生 startDragging（它会冻结 WebView 的 rAF，方向感知形变做不出来）。
@@ -1173,6 +1173,7 @@ function reportPetHitbox() {
   const uiBlocking =
     (catDialog && catDialog.classList.contains('open')) ||
     (nameDialog && nameDialog.classList.contains('open')) ||
+    (settingsDialog && settingsDialog.classList.contains('open')) ||
     document.body.classList.contains('pomodoro-active');
 
   if (uiBlocking) {
@@ -1291,6 +1292,107 @@ const nameDialog = document.getElementById('name-dialog');
 const nameInput = document.getElementById('name-input');
 const nameOkBtn = document.getElementById('name-ok');
 const nameCancelBtn = document.getElementById('name-cancel');
+
+// ============================================================
+// 通用设置弹窗（复用名字输入框的像素风格）
+// ============================================================
+// 「喝水提醒」「休息拉伸」点右键菜单时，先弹这个设置框让用户配置
+// 间隔/毫升数（localStorage 持久化），确定后再播放动画 / 打开面板。
+const settingsDialog = document.getElementById('settings-dialog');
+const settingsLabel = document.getElementById('settings-label');
+const settingsInput = document.getElementById('settings-input');
+const settingsUnit = document.getElementById('settings-unit');
+const settingsOk = document.getElementById('settings-ok');
+const settingsCancel = document.getElementById('settings-cancel');
+const STRETCH_INTERVAL_KEY = 'pixelcat.stretch.interval'; // 分钟
+const WATER_INTERVAL_KEY = 'pixelcat.water.interval';       // 分钟
+const WATER_ML_KEY = 'pixelcat.water.ml';                   // 每次 ml
+
+// 当前设置弹窗模式：'water' | 'stretch'；确认后的回调。
+let settingsMode = null;
+let settingsOnOk = null;
+
+function openSettingsDialog(mode, onOk) {
+  if (!settingsDialog) return;
+  settingsMode = mode;
+  settingsOnOk = onOk;
+  const row2 = document.getElementById('settings-row2');
+  const input2 = document.getElementById('settings-input2');
+  if (mode === 'water') {
+    // 喝水：两行 —— 每次喝水量(ml) + 提醒间隔(分钟)
+    settingsLabel.textContent = '每次喝水量';
+    settingsUnit.textContent = 'ml';
+    settingsInput.value = loadNum(WATER_ML_KEY, WATER_DRINK_ML);
+    if (row2) row2.style.display = 'flex';
+    if (input2) input2.value = loadNum(WATER_INTERVAL_KEY, WATER_REMINDER_INTERVAL / 60000);
+  } else {
+    // 拉伸/其他：单行 —— 提醒间隔(分钟)
+    settingsLabel.textContent = '提醒间隔';
+    settingsUnit.textContent = '分钟';
+    settingsInput.value = loadNum(mode === 'stretch' ? STRETCH_INTERVAL_KEY : WATER_INTERVAL_KEY,
+      mode === 'stretch' ? STRETCH_INTERVAL / 60000 : WATER_REMINDER_INTERVAL / 60000);
+    if (row2) row2.style.display = 'none';
+  }
+  settingsDialog.classList.add('open');
+  settingsInput.focus();
+  settingsInput.select();
+  // 打开设置框时整窗可交互（穿透需关闭）
+  reportPetHitbox();
+}
+
+function closeSettingsDialog() {
+  if (!settingsDialog) return;
+  settingsDialog.classList.remove('open');
+  settingsMode = null;
+  settingsOnOk = null;
+}
+
+function loadNum(key, fallback) {
+  try {
+    const v = parseInt(localStorage.getItem(key) || '', 10);
+    if (!isNaN(v) && v > 0) return v;
+  } catch { /* 忽略 */ }
+  return fallback;
+}
+
+function saveNum(key, v) {
+  try { localStorage.setItem(key, String(v)); } catch { /* 忽略 */ }
+}
+
+function confirmSettings() {
+  const v = parseInt(settingsInput.value, 10);
+  if (isNaN(v) || v <= 0) {
+    showToast('请输入有效数字');
+    return;
+  }
+  let v2 = null;
+  if (settingsMode === 'water') {
+    saveNum(WATER_ML_KEY, v);
+    const input2 = document.getElementById('settings-input2');
+    if (input2) {
+      v2 = parseInt(input2.value, 10);
+      if (!isNaN(v2) && v2 > 0) saveNum(WATER_INTERVAL_KEY, v2);
+      else v2 = null;
+    }
+  } else if (settingsMode === 'stretch') {
+    saveNum(STRETCH_INTERVAL_KEY, v);
+  } else {
+    saveNum(WATER_INTERVAL_KEY, v);
+  }
+  const cb = settingsOnOk;
+  closeSettingsDialog();
+  reportPetHitbox();
+  if (cb) cb(v, v2);
+}
+
+if (settingsDialog && settingsOk && settingsCancel) {
+  settingsOk.addEventListener('click', confirmSettings);
+  settingsCancel.addEventListener('click', closeSettingsDialog);
+  settingsInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') confirmSettings();
+    if (e.key === 'Escape') closeSettingsDialog();
+  });
+}
 
 function getPetName() {
   try {
@@ -1495,14 +1597,14 @@ function scheduleWaterReminder() {
 // 提醒气泡显示期间点击猫 → 喝水打卡（喝水光晕 8 秒窗口内连点可连续喝多杯）。
 function shouldDrinkOnClick() {
   return document.body.classList.contains('water-active') &&
-    getWaterProgress() < 1 && // 今日未达标
-    isWaterActiveHours();
+    getWaterProgress() < 1; // 今日未达标；主动点击喝水不受时段限制
 }
 
-// 打卡喝水：喝 200ml → 猫抖一下 + 进度水色加深；达成目标 → 庆祝气泡。
+// 打卡喝水：喝 ml → 记录进图表面板 + 播放循环动画；达成目标 → 庆祝气泡。
+// force=true 表示「主动点击」（右键提醒后点猫/手动，不受 08-23 时段限制）。
 // 返回 true 表示「这是一次喝水点击」（不应再播放 slap 敲击音）。
-function handleWaterDrink() {
-  if (isWaterActiveHours()) {
+function handleWaterDrink(force) {
+  if (isWaterActiveHours() || force) {
     loadWaterState();
     if (waterState.drunkML < WATER_DAILY_GOAL_ML) {
       waterState.drunkML = Math.min(WATER_DAILY_GOAL_ML, waterState.drunkML + WATER_DRINK_ML);
@@ -1517,12 +1619,11 @@ function handleWaterDrink() {
         showToast('🎉 今日饮水目标达成！');
       } else {
         saveWaterState();
-        showToast('💧 咕咚！喝了一杯水 (+200ml)');
+        showToast(`💧 咕咚！已喝 ${WATER_DRINK_ML}ml`);
       }
-      // 点击打卡 = 喝 200ml，同时停止喝水循环动画（回到待机）。
-      // 不再 8 秒自动停止：动画在触发后一直循环，直到用户点击猫本身。
-      document.body.classList.remove('water-active');
-      stopDrinkAnimation();
+      // 打卡 = 喝 ml，记录进图表面板；同时播放喝水循环动画（提醒触发后
+      // 一直循环到用户再次点击停止）。
+      startDrinkAnimation();
       return true;
     }
   }
@@ -1718,12 +1819,27 @@ function init() {
   // Toast 监听
   if (T && T.event && T.event.listen) {
     T.event.listen('show-toast', (event) => showToast(event.payload));
-    // 「喝水提醒」菜单点击：播放喝水动画 + 在小猫左上方打开喝水记录图表面板（× 关闭）
+    // 「喝水提醒」菜单点击：先弹设置框（每次ml + 提醒间隔分钟），确定后：
+    //   保存新设置 + 播放喝水动画（water-active 亮起），**不记录**。
+    //   记录喝水 = 用户随后**点击小猫**才发生（shouldDrinkOnClick → handleWaterDrink）。
     T.event.listen('water-reminder-now', () => {
-      showWaterReminder(isWaterUrgent());
-      openWaterLogPanel();
+      openSettingsDialog('water', (ml, intervalMin) => {
+        if (!intervalMin) intervalMin = loadNum(WATER_INTERVAL_KEY, WATER_REMINDER_INTERVAL / 60000);
+        WATER_REMINDER_INTERVAL = Math.max(1, intervalMin) * 60000;
+        scheduleWaterReminder();
+        WATER_DRINK_ML = Math.max(1, ml);
+        showWaterReminder(isWaterUrgent());
+        openWaterLogPanel();
+      });
     });
-    T.event.listen('stretch-reminder-now', () => showStretchReminder());
+    // 「休息拉伸」菜单点击：先弹设置框（提醒间隔分钟），确定后再播放拉伸动画。
+    T.event.listen('stretch-reminder-now', () => {
+      openSettingsDialog('stretch', (intervalMin) => {
+        STRETCH_INTERVAL = Math.max(1, intervalMin) * 60000;
+        startStretchReminder();
+        showStretchReminder();
+      });
+    });
     T.event.listen('open-pomodoro', () => {
       startPomodoro();
     });
@@ -1813,8 +1929,8 @@ function init() {
           // 拖动过 → 完全无声
           stopSlap();
         } else if (shouldDrinkOnClick()) {
-          // 提醒气泡期间点击猫 = 喝水打卡（喝 200ml，同时停止喝水循环）
-          handleWaterDrink();
+          // 提醒气泡期间点击猫 = 喝水打卡（按设定 ml 记录进图表面板 + 循环动画）
+          handleWaterDrink(true);
         } else {
           // 普通点击猫：先停止喝水/拉伸循环动画（提醒触发后一直循环到用户点击），
           // 再播放 slap 敲击音。

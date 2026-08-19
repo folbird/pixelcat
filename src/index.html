@@ -230,7 +230,7 @@
 
     #name-dialog {
       position: fixed;
-      top: 238px;
+      top: 180px;
       left: 50%;
       transform: translateX(-50%);
       display: none;
@@ -280,6 +280,63 @@
 
     /* 小猫选择弹窗：像素风格，中文品种名，7 品种网格。窗口高 305px，弹窗贴顶显示
        （盖住小猫也没关系），保证 7 个按钮 + 关闭按钮完整可见。 */
+    /* 通用设置弹窗：复用名字输入框的像素风格（白底圆角 + 深色按钮） */
+    #settings-dialog {
+      position: fixed;
+      top: 130px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 8px;
+      background: #fff;
+      border: 3px solid #2B2B2B;
+      border-radius: 14px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      z-index: 205;
+    }
+    #settings-dialog.open { display: flex; flex-direction: column; gap: 6px; }
+    #settings-dialog .settings-row { display: flex; align-items: center; gap: 6px; }
+    #settings-dialog .settings-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: #333;
+      white-space: nowrap;
+    }
+    #settings-dialog input {
+      width: 74px;
+      box-sizing: border-box;
+      padding: 5px 8px;
+      font-size: 14px;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      color: #333;
+      background: transparent;
+      border: 2px solid #2B2B2B;
+      border-radius: 8px;
+      outline: none;
+      text-align: center;
+      caret-color: #333;
+    }
+    #settings-dialog .settings-buttons { display: flex; gap: 6px; }
+    #settings-dialog button {
+      min-width: 34px;
+      height: 30px;
+      padding: 0 10px;
+      font-size: 12px;
+      font-family: "ArkPixel12CN", "ArkPixel12", -apple-system, "PingFang SC", sans-serif;
+      font-weight: 700;
+      color: #fff;
+      background: #111;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+    #settings-dialog button:hover { background: #333; }
+    #settings-dialog button:active { transform: scale(0.94); }
+
     #cat-dialog {
       position: fixed;
       top: 6px;
@@ -360,6 +417,24 @@
     <div class="dialog-buttons">
       <button id="name-ok" class="primary">OK</button>
       <button id="name-cancel">×</button>
+    </div>
+  </div>
+
+  <!-- 通用设置弹窗：拉伸/喝水设定间隔或毫升数（复用名字输入框像素风格） -->
+  <div id="settings-dialog">
+    <div class="settings-row" id="settings-row1">
+      <span class="settings-label" id="settings-label"></span>
+      <input id="settings-input" type="text" autocomplete="off" />
+      <span class="settings-label" id="settings-unit"></span>
+    </div>
+    <div class="settings-row" id="settings-row2" style="display:none">
+      <span class="settings-label">提醒间隔</span>
+      <input id="settings-input2" type="text" autocomplete="off" />
+      <span class="settings-label">分钟</span>
+    </div>
+    <div class="settings-buttons">
+      <button id="settings-ok">OK</button>
+      <button id="settings-cancel">×</button>
     </div>
   </div>
 

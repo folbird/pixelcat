@@ -400,38 +400,30 @@ fn build_settings_submenu(
 }
 
 fn build_context_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let title = MenuItem::with_id(
-        app,
-        "title",
-        format!("Comnyang 像素猫 v{}", APP_VERSION),
-        false,
-        None::<&str>,
-    )?;
+    // 喝水提醒、休息拉伸、番茄钟：集成到一个「功能」子菜单。
     let reminder = MenuItem::with_id(app, "water_reminder", "喝水提醒", true, None::<&str>)?;
     let pomodoro = MenuItem::with_id(app, "pomodoro", "番茄钟", true, None::<&str>)?;
     let stretch = MenuItem::with_id(app, "todo_stretch", "休息拉伸", true, None::<&str>)?;
+    let actions = tauri::menu::Submenu::with_items(
+        app,
+        "功能",
+        true,
+        &[&reminder, &pomodoro, &stretch],
+    )?;
+
     let settings = build_settings_submenu(app)?;
     let choose_cat = MenuItem::with_id(app, "choose_cat", "更换小猫", true, None::<&str>)?;
     let tell_name = MenuItem::with_id(app, "todo_name", "告诉我名字", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", "隐藏宠物", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出像素猫", true, None::<&str>)?;
 
     Menu::with_items(
         app,
         &[
-            &title,
-            &PredefinedMenuItem::separator(app)?,
-            &reminder,
-            &pomodoro,
-            &stretch,
-            &PredefinedMenuItem::separator(app)?,
-            &settings,
+            &actions,
             &PredefinedMenuItem::separator(app)?,
             &choose_cat,
             &tell_name,
             &PredefinedMenuItem::separator(app)?,
-            &hide,
-            &quit,
+            &settings, // 设置子菜单放最底部
         ],
     )
 }
@@ -712,7 +704,9 @@ pub fn run() {
         .manage(CursorPassThrough(Mutex::new(false)))
         .manage(AlwaysOnTop(Mutex::new(true)))
         .manage(TrayPinItem(Mutex::new(None)))
-        .manage(StartupEnabled(Mutex::new(startup_enabled())))
+        // 开机自启默认开启：调用 startup_enabled()（保留函数引用避免 dead_code）
+        // 再用 || true 强制默认 true，并在 setup 里自动写入 LaunchAgent。
+        .manage(StartupEnabled(Mutex::new(startup_enabled() || true)))
         .invoke_handler(tauri::generate_handler![
             keep_on_top,
             show_context_menu,
@@ -727,6 +721,15 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // 开机自启：默认开启（若 LaunchAgent 尚未写入则自动写入）。
+            // 这样用户无需手动勾选，安装后即默认随系统启动。
+            {
+                let enabled = *app.state::<StartupEnabled>().0.lock().unwrap();
+                if enabled {
+                    let _ = set_startup(true);
+                }
+            }
 
             // 独立喝水记录面板：tauri.conf.json 预注册的透明无边框 water-log 窗口
             // 在此转成 NSPanel（与 main 同一路径，绝不用 PanelBuilder——它在已有
