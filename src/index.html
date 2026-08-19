@@ -65,7 +65,7 @@
 
     body.pet-idle #pet { animation: idle-breathe 2.4s ease-in-out infinite; }
     body.pet-blink #pet { animation: idle-blink 0.16s ease-in-out; }
-    body.pet-sleep #pet { animation: sleep-breathe 3.2s ease-in-out infinite; filter: saturate(0.72) brightness(0.86); }
+    body.pet-sleep #pet { animation: sleep-breathe 3.2s ease-in-out infinite; }
     body.pet-typing #pet { animation: typing-hop 0.18s ease-out; }
     @keyframes idle-breathe { 0%,100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-1px) scaleY(1.015); } }
     @keyframes idle-blink { 0%,100% { transform: scaleY(1); } 45%,65% { transform: scaleY(0.86); } }
@@ -175,6 +175,32 @@
     .pomodoro-btn:active { background: rgba(255, 255, 255, 0.85); }
     #pomodoro-pause-btn { left: 50%; transform: translateX(calc(-50% - 14px)); }
     #pomodoro-cancel-btn { left: 50%; transform: translateX(calc(-50% + 14px)); }
+
+    #quote {
+      position: fixed;
+      top: 22px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: 300px;
+      padding: 6px 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      font-family: "ArkPixel12CN", "ArkPixel12", "Monaco", "Menlo", "Courier New", monospace;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: #2d3e50;
+      background: rgba(255, 255, 255, 0.94);
+      border: 2px solid #7b8c9d;
+      border-radius: 8px;
+      text-align: center;
+      box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.35);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 97;
+    }
+    #quote.show { opacity: 1; }
+    body.pomodoro-active #quote { top: 54px; }
 
     #sleep-z {
       position: fixed;
@@ -326,6 +352,7 @@
   </div>
   <div id="sleep-z" aria-hidden="true">Z</div>
   <div id="toast"></div>
+  <div id="quote" aria-hidden="true"></div>
 
   <!-- 名字输入弹窗：窗口顶边不动向下扩大，输入框固定在猫正下方 -->
   <div id="name-dialog">

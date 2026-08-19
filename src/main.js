@@ -226,6 +226,61 @@ function setBreed(id) {
   if (petState !== 'typing') drawIdleFrame();
 }
 
+// 从品种矩阵提取「全身毛色」：统计整个矩阵所有非透明像素使用的调色板颜色，
+// 出现次数最多的那个必然是大面积毛（黑猫→黑、白猫→白、俄罗斯蓝→灰蓝、
+// 奶牛/橘猫→棕黄、三花→白/橙）。用它覆盖眼睛区域即"眼眶融入毛色"。
+function getBreedFurColor() {
+  const rows = getBreedRows();
+  const pal = getBreedPalette();
+  if (rows.length === 0) return null;
+  const counts = new Map();
+  for (const row of rows) {
+    if (!row) continue;
+    for (let c = 0; c < row.length; c++) {
+      const code = row.charCodeAt(c) - 48;
+      if (code === 0) continue;
+      const color = pal[code - 1];
+      if (!color) continue;
+      counts.set(color, (counts.get(color) || 0) + 1);
+    }
+  }
+  let best = null;
+  let bestN = 0;
+  for (const [color, n] of counts) {
+    if (n > bestN) { best = color; bestN = n; }
+  }
+  return best;
+}
+
+// 从品种矩阵提取瞳孔真实颜色：取两眼中心 3×3 块（0-indexed 行 9-11，
+// 左眼列 8-10、右眼列 17-19）出现最多的字符对应的 palette 色。
+// 各品种瞳孔色编码在矩阵里（俄罗斯蓝 '4'→#2E009E、三花 '4'→#DFECE1、
+// 暹罗/虎斑 '9'→黑），不用 palette[1] 的近似灰。
+function getBreedPupilColor() {
+  const rows = getBreedRows();
+  const pal = getBreedPalette();
+  if (rows.length < 14) return null;
+  const counts = new Map();
+  const sampleCols = [8, 9, 10, 17, 18, 19];
+  for (let r = 9; r <= 11; r++) {
+    const row = rows[r];
+    for (const c of sampleCols) {
+      if (!row) continue;
+      const code = row.charCodeAt(c) - 48;
+      if (code === 0) continue;
+      const color = pal[code - 1];
+      if (!color) continue;
+      counts.set(color, (counts.get(color) || 0) + 1);
+    }
+  }
+  let best = null;
+  let bestN = 0;
+  for (const [color, n] of counts) {
+    if (n > bestN) { best = color; bestN = n; }
+  }
+  return best;
+}
+
 function drawIdleFrame() {
   const rows = getBreedRows();
   if (rows.length === 0) return;
@@ -256,11 +311,16 @@ function drawIdleFrame() {
   // ---- 灵动眼睛：盖掉矩阵里的静态眼睛块 ----
   // 眼睛在 34×36 矩阵中为 3×3 像素（1-indexed：行 11-13，左眼列 9-11，右眼列 18-20）。
   // 原版观感：白眼球底 + 黑瞳孔，瞳孔随鼠标转动；眨眼=闭眼横线；瞌睡=细眯眼。
+  // LE/RE 严格保持 3×3 cell（= 原矩阵中白色眼睛区），待机/眨眼/闭眼共用——
+  // **待机睁眼状态绝不改动**。睡觉时单独按 3×4 区域（眼白含上下 2 行边界）处理。
   const LE = { x: originX + 8 * cell, y: originY + 10 * cell, w: 3 * cell, h: 3 * cell };
   const RE = { x: originX + 17 * cell, y: originY + 10 * cell, w: 3 * cell, h: 3 * cell };
   idleEyeRects = [LE, RE]; // 供红温保护使用（眼睛不染红）
   const eyeWhite = palette[0] || '#FFFFFF';
-  const eyeDark = palette[1] || '#1C1C1C';
+  // 瞳孔真实颜色：从品种矩阵的眼睛中心块提取（俄罗斯蓝=深靛蓝#2E009E、
+  // 三花=淡绿白#DFECE1、暹罗/虎斑=黑…每个品种都编码在矩阵里），
+  // palette[1] 只是「深灰」近似，对特定品种会偏色。
+  const eyeDark = getBreedPupilColor() || palette[1] || '#1C1C1C';
   const sleeping = petState === 'sleep';
   const blinking = petState === 'blink' || sleeping;
   // 瞳孔 3×3 cell（9×9px = 眼白大小），跟随鼠标偏移 ±1px → 转动时两侧露出眼白边。
@@ -268,22 +328,39 @@ function drawIdleFrame() {
   const ey = Math.max(-1, Math.min(1, Math.round(eyeOffsetY * 0.35)));
   const pupilW = cell * 3;
   const pupilH = cell * 3;
-  // 闭眼时眼睛区域填充的「周围毛色」：取 palette 里第 3 个颜色（多数品种是脸部主毛色），
-  // 若不存在则退化为 palette[1]（身体色）。黑猫 palette=[#FFFFFF,#1C1C1C]，退化为黑色 →
-  // 眼睛区域被黑毛盖住，和脸融为一体。
-  const furColor = palette[2] || palette[1] || eyeDark;
+  // 闭眼时眼睛区域填充的「毛色」：取整个矩阵出现最多的颜色（全身毛色，
+  // 黑猫→黑、白猫→白、俄罗斯蓝→灰蓝、奶牛/橘猫→棕黄…），
+  // 提取失败才退化到 palette[1]（身体色）。
+  const furColor = getBreedFurColor() || palette[1] || eyeDark;
   // 眨眼时眼睛区域先用毛色填平（盖掉矩阵里的白眼球），再画一条深色闭合横线。
   // 瞌睡时用毛色填平后画两条淡色细横线（= 表示闭着的眼睛）。
   // closedLineY1/Y2、lineW 依赖 eye，必须在循环内计算。
   for (const eye of [LE, RE]) {
     const lineW = Math.max(1, Math.round(cell * 0.66));
     if (sleeping) {
-      // 瞌睡：先用毛色覆盖「眼白 + 周围白色描边轮廓」整个区域（让眼睛完全融入脸部），
-      // 再每只闭合眼睛中央画一条淡色细横线（左眼一条、右眼一条）。
-      ctx.fillStyle = furColor;
-      ctx.fillRect(eye.x - cell, eye.y - cell, eye.w + cell * 2, eye.h + cell * 2);
-      ctx.fillStyle = eyeWhite;
-      ctx.fillRect(eye.x + Math.round(cell * 0.5), eye.y + Math.round(eye.h * 0.45), eye.w - cell, lineW);
+      // 瞌睡：**精确覆盖 12 个眼白像素 + 3×3 瞳孔，绝不外扩其他区域**。
+      // 用户给定坐标（1-indexed）左眼：上眼白第10行9-11、下眼白第14行9-11、
+      // 左眼白第8列11-13、右眼白第12列11-13；右眼：上眼白第10行18-20、
+      // 下眼白第14行18-20、左眼白第17列11-13、右眼白第21列11-13。
+      // 0-indexed 换算后，LE/RE（=3×3 瞳孔块）正好提供基准：
+      //   上横线 = 瞳孔上方 1 行（eye.y-cell）、下横线 = 瞳孔下方 1 行（eye.y+eye.h）
+      //   左竖线 = 瞳孔左 1 列（eye.x-cell）、右竖线 = 瞳孔右 1 列（eye.x+eye.w）
+      // 依次 fillRect 覆盖这 4 条线 + 瞳孔本体，用的都是全身毛色；
+      // 最后在瞳孔正中央画一条浅灰色细横线（3 格宽 × 1 格高）表示闭眼。
+      ctx.fillStyle = furColor; // 覆盖色 = 颜色最多的像素（全身毛色）
+      // 上横线（3×1 cell）
+      ctx.fillRect(eye.x, eye.y - cell, eye.w, cell);
+      // 下横线（3×1 cell）
+      ctx.fillRect(eye.x, eye.y + eye.h, eye.w, cell);
+      // 左竖线（1×3 cell）
+      ctx.fillRect(eye.x - cell, eye.y, cell, eye.h);
+      // 右竖线（1×3 cell）
+      ctx.fillRect(eye.x + eye.w, eye.y, cell, eye.h);
+      // 瞳孔 3×3 cell
+      ctx.fillRect(eye.x, eye.y, eye.w, eye.h);
+      // 浅灰色细横线（瞳孔中央一行，横贯 3 格 = 9px 宽 × 3px 高）
+      ctx.fillStyle = '#C0C0C0';
+      ctx.fillRect(eye.x, eye.y + cell, eye.w, cell);
     } else if (blinking) {
       // 眨眼：同样先盖掉眼白与白色描边，再画一条深色横线。
       ctx.fillStyle = furColor;
@@ -885,15 +962,12 @@ function drawStretchFrame() {
   applyHeatEffects();
 }
 
-// 拉伸动画帧推进（12fps 由 init 的 setInterval 驱动）：播完停在最后一帧。
+// 拉伸动画帧推进（12fps 由 init 的 setInterval 驱动）：
+// 无限循环播放（drawStretchFrame 内部 i = frameIndex % 36 自动回绕），
+// 直到用户点击小猫才由 stopStretchAnimation 停止。
 function stretchTick() {
   if (stretchPhase !== 'animating') return;
   stretchFrameIndex += 1;
-  if (stretchFrameIndex >= STRETCH_FRAME_COUNT) {
-    stretchPhase = 'finished'; // 停最后一帧，不再推进
-    drawStretchFrame();
-    return;
-  }
   drawStretchFrame();
 }
 
@@ -917,6 +991,14 @@ function stopStretchAnimation() {
   if (drinkPhase !== null) drawDrinkFrame();
   else if (petState === 'typing') drawFrame(frameIndex);
   else drawIdleFrame();
+}
+
+// 用户点击猫 → 停止喝水/拉伸循环动画并退出 water-active 光晕状态。
+// 喝水/拉伸提醒触发后一直循环播放，直到用户点击小猫本身才停止。
+function stopOverlayAnimations() {
+  document.body.classList.remove('water-active');
+  if (drinkPhase !== null) stopDrinkAnimation();
+  if (stretchPhase !== null) stopStretchAnimation();
 }
 
 // 喝水/拉伸任一覆盖动画播放中（含拉伸停在最后一帧）→ 其余绘制全部让路。
@@ -967,6 +1049,182 @@ frames.forEach((frame) => {
   };
 });
 drawIdleFrame();
+
+// ============================================================
+// 点击穿透：canvas 非透明像素包围盒 → 上报 Rust 切换窗口穿透
+// ============================================================
+// 桌面宠物窗口是透明背景，若整个 128×128 canvas 都拦截鼠标会把四角透明区
+// 也挡住下层应用。这里每 ~100ms 扫描 canvas 当前帧的非透明像素包围盒，
+// 映射到窗口内逻辑坐标后 invoke set_pet_hitbox；Rust 光标轮询据此动态
+// 切换 set_ignore_cursor_events：光标在猫上可交互、在透明区则穿透。
+let lastReportedHitbox = '';
+
+// ============================================================
+// 语录轮播：每 15 分钟换一条一言，显示 1 分钟
+// ============================================================
+// 使用一言 API（https://v1.hitokoto.cn/）——免费、无需 API key、返回 JSON：
+//   { hitokoto: "一句话", from: "来源", ... }
+// 网络失败时用本地备选语录兜底（保证离线也有内容）。
+const QUOTE_INTERVAL_MS = 15 * 60 * 1000; // 每 15 分钟换一条
+const QUOTE_VISIBLE_MS = 60 * 1000;       // 每条显示 1 分钟
+const QUOTE_API = 'https://v1.hitokoto.cn/?encode=json&c=i&c=a&c=b&c=k';
+const FALLBACK_QUOTES = [
+  '喵～今天也要加油呀！',
+  '别忘了喝水哦 💧',
+  '久坐起身拉伸一下 🧘',
+  '世界很大，喵想去看看 🌍',
+  '专注当下，做闪闪发光的事 ✨',
+  '多休息，猫生才快乐 😸',
+  '时间会奖励认真生活的人 🕐',
+];
+let lastQuoteFetch = 0;
+
+function getQuoteEl() {
+  return document.getElementById('quote');
+}
+
+// 抓取一言语录（带 3s 超时兜底，避免网络卡住轮播）
+function fetchQuote() {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), 3000) : null;
+  return fetch(QUOTE_API, controller ? { signal: controller.signal } : {})
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (timer) clearTimeout(timer);
+      if (data && typeof data.hitokoto === 'string' && data.hitokoto.trim()) {
+        return data.hitokoto.trim();
+      }
+      return null;
+    })
+    .catch(() => {
+      if (timer) clearTimeout(timer);
+      return null;
+    });
+}
+
+// 显示语录气泡（1 分钟后自动隐藏），15 分钟后再拉取下一条
+function showQuote() {
+  const el = getQuoteEl();
+  if (!el) return;
+  const now = Date.now();
+  // 距上次展示已满 15 分钟才重新拉取新语录（每次显示固定用同一条）
+  const needNew = now - lastQuoteFetch >= QUOTE_INTERVAL_MS;
+  const useFallback = () => {
+    el.textContent = FALLBACK_QUOTES[Math.floor(Math.random() * FALLBACK_QUOTES.length)];
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), QUOTE_VISIBLE_MS);
+  };
+  if (!needNew) return; // 15 分钟未到就不刷新（也保持已显示的气泡状态）
+  lastQuoteFetch = now;
+  fetchQuote().then((text) => {
+    // 网络请求完成时可能已过 15 分钟阈值，仍显示结果
+    el.textContent = text || FALLBACK_QUOTES[Math.floor(Math.random() * FALLBACK_QUOTES.length)];
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), QUOTE_VISIBLE_MS);
+  });
+}
+
+// 计算 canvas 当前非透明像素的包围盒（相对 canvas 内部坐标）。
+// 喝水/拉伸动画帧同样适用（它们也是猫的像素）。
+function computeCatPixelsBBox() {
+  if (canvas.width === 0 || canvas.height === 0) return null;
+  let imageData;
+  try {
+    imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  } catch (err) {
+    return null;
+  }
+  const data = imageData.data;
+  let minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+  for (let y = 0; y < canvas.height; y++) {
+    const row = y * canvas.width;
+    for (let x = 0; x < canvas.width; x++) {
+      // alpha > 8：忽略抗锯齿产生的极淡像素，避免包围盒外扩
+      if (data[(row + x) * 4 + 3] > 8) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) return null;
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+
+// 上报猫的「屏幕逻辑坐标」命中矩形（Rust 侧 click-through 判定用）。
+// Rust 光标轮询提供的光标坐标为屏幕逻辑像素（macOS CGEventGetLocation 直接是
+// 逻辑坐标；Windows 已 ÷ scale_factor）。因此这里也必须上报「屏幕逻辑坐标」：
+//   outerPosition() 返回物理像素 ÷ devicePixelRatio = 窗口左上角屏幕逻辑坐标
+//   getBoundingClientRect() 返回视口逻辑坐标（= 相对窗口左上角的 CSS 像素）
+//   两者相加 = 猫矩形在屏幕上的逻辑坐标。与 Rust 判定同一基准，直接命中。
+function reportPetHitbox() {
+  const T = window.__TAURI__;
+  if (!(T && T.core && T.core.invoke)) return;
+  const dpr = window.devicePixelRatio || 1;
+  const win = T.window && T.window.getCurrentWindow ? T.window.getCurrentWindow() : null;
+  if (!win || !win.outerPosition || !win.innerSize) return;
+
+  // 功能 UI 打开时，整个窗口必须保持可交互（否则穿透会让弹窗按钮点不了）：
+  //   - 更换小猫弹窗（cat-dialog.open）
+  //   - 名字输入弹窗（name-dialog.open）
+  //   - 番茄钟运行中（pomodoro-active，暂停/取消按钮可见）
+  // 此时上报「整窗矩形」→ Rust 判定光标永在窗口内 → 关闭穿透。
+  const uiBlocking =
+    (catDialog && catDialog.classList.contains('open')) ||
+    (nameDialog && nameDialog.classList.contains('open')) ||
+    document.body.classList.contains('pomodoro-active');
+
+  if (uiBlocking) {
+    const reportFullWindow = () => {
+      Promise.all([win.outerPosition(), win.innerSize()])
+        .then(([pos, sz]) => {
+          // outerPosition/innerSize 均为物理像素，÷ dpr 换算成屏幕逻辑像素。
+          const x = Math.round(pos.x / dpr);
+          const y = Math.round(pos.y / dpr);
+          const w = Math.round(sz.width / dpr);
+          const h = Math.round(sz.height / dpr);
+          const key = `F,${x},${y},${w},${h}`;
+          if (key === lastReportedHitbox) return; // 避免无变化时反复 invoke
+          lastReportedHitbox = key;
+          T.core.invoke('set_pet_hitbox', { x, y, width: w, height: h }).catch(() => {});
+        })
+        .catch(() => {});
+    };
+    reportFullWindow();
+    return;
+  }
+
+  // 纯待机：只上报猫身非透明像素包围盒（空白透明区点击穿透到下层应用，
+  // 只有真正落在猫像素上才可交互）。
+  const bbox = computeCatPixelsBBox();
+  if (!bbox) return;
+  let r;
+  try {
+    r = canvas.getBoundingClientRect();
+  } catch (err) {
+    return;
+  }
+  if (r.width === 0 || r.height === 0) return;
+  const relX = bbox.x / canvas.width;
+  const relY = bbox.y / canvas.height;
+  const relW = bbox.w / canvas.width;
+  const relH = bbox.h / canvas.height;
+  const rx = r.left + relX * r.width;
+  const ry = r.top + relY * r.height;
+  const rw = relW * r.width;
+  const rh = relH * r.height;
+  win.outerPosition().then((pos) => {
+    const x = Math.round(pos.x / dpr + rx);
+    const y = Math.round(pos.y / dpr + ry);
+    const w = Math.round(rw);
+    const h = Math.round(rh);
+    const key = `C,${x},${y},${w},${h}`;
+    if (key === lastReportedHitbox) return; // 避免无变化时反复 invoke
+    lastReportedHitbox = key;
+    T.core.invoke('set_pet_hitbox', { x, y, width: w, height: h }).catch(() => {});
+  }).catch(() => {});
+}
 
 // ============================================================
 // 小猫品种选择（中文弹窗）：右键菜单「更换小猫」→ 打开弹窗 → 点击品种
@@ -1203,6 +1461,7 @@ function shouldWaterRemind() {
 
 // 展示喝水提醒：气泡 + 猫抖一下 + 点击猫 = 喝水打卡。
 // 加强模式（距上次喝水 > 90 分钟）用更醒目的文案。
+// 喝水动画循环播放到用户点击猫才停止（不再 8 秒自动停）。
 function showWaterReminder(urgent) {
   document.body.classList.add('water-active');
   // 注意：播放喝水动画时不弹图表面板（图表面板仅由右键菜单「喝水提醒」主动打开）
@@ -1214,11 +1473,8 @@ function showWaterReminder(urgent) {
   startDrinkAnimation();
   // 首次用户点击后才预热 AudioContext；若已预热则提醒喵声立即播放
   if (audioWarmedUp) playBuffer('meow-alert');
-  clearTimeout(waterReminderRestoreTimer);
-  waterReminderRestoreTimer = setTimeout(() => {
-    document.body.classList.remove('water-active');
-    stopDrinkAnimation();
-  }, WATER_REMINDER_VISIBLE_MS);
+  // 注意：不再设置 waterReminderRestoreTimer —— 喝水动画一直循环，
+  // 直到用户点击小猫本身才停止（stopOverlayAnimations）。
 }
 
 // 读取外部触发的提醒强度：距上次喝水 > 90 分钟 → 加强文案。
@@ -1263,13 +1519,10 @@ function handleWaterDrink() {
         saveWaterState();
         showToast('💧 咕咚！喝了一杯水 (+200ml)');
       }
-      document.body.classList.add('water-active');
-      startDrinkAnimation();
-      clearTimeout(waterReminderRestoreTimer);
-      waterReminderRestoreTimer = setTimeout(() => {
-        document.body.classList.remove('water-active');
-        stopDrinkAnimation();
-      }, WATER_REMINDER_VISIBLE_MS);
+      // 点击打卡 = 喝 200ml，同时停止喝水循环动画（回到待机）。
+      // 不再 8 秒自动停止：动画在触发后一直循环，直到用户点击猫本身。
+      document.body.classList.remove('water-active');
+      stopDrinkAnimation();
       return true;
     }
   }
@@ -1288,11 +1541,8 @@ function showStretchReminder() {
   startStretchAnimation();
   // 首次用户点击后才预热 AudioContext；若已预热则拉伸喵声立即播放
   if (audioWarmedUp) playBuffer('meow');
-  // 动画播完停在最后一帧，保持到提醒窗口结束再恢复小猫
-  clearTimeout(stretchRestoreTimer);
-  stretchRestoreTimer = setTimeout(() => {
-    stopStretchAnimation();
-  }, WATER_REMINDER_VISIBLE_MS);
+  // 注意：不再设置 stretchRestoreTimer —— 拉伸动画一直循环，
+  // 直到用户点击小猫本身才停止（stopOverlayAnimations）。
 }
 
 function startStretchReminder() {
@@ -1509,6 +1759,9 @@ function init() {
         // 捕获指针：鼠标移出窗口后仍能收到 pointermove（拖动持续）
         try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
 
+        // 通知 Rust：进入拖拽状态 → 点击穿透判定保持可交互（光标划过透明区也不穿透）
+        invoke('set_window_dragging', { dragging: true });
+
         // 记录拖拽基准（屏幕逻辑坐标 + 窗口物理坐标）
         dragging = true;
         dragMoved = false; // 本次按下尚未移动 → 视为点击（敲击）
@@ -1554,14 +1807,18 @@ function init() {
     canvas.addEventListener('pointerup', (e) => {
       if (dragging) {
         dragging = false;
+        // 通知 Rust：拖拽结束
+        invoke('set_window_dragging', { dragging: false });
         if (dragMoved) {
           // 拖动过 → 完全无声
           stopSlap();
         } else if (shouldDrinkOnClick()) {
-          // 提醒气泡期间点击猫 = 喝水打卡（喝 200ml）
+          // 提醒气泡期间点击猫 = 喝水打卡（喝 200ml，同时停止喝水循环）
           handleWaterDrink();
         } else {
-          // 普通点击猫 → 播放 slap 敲击
+          // 普通点击猫：先停止喝水/拉伸循环动画（提醒触发后一直循环到用户点击），
+          // 再播放 slap 敲击音。
+          stopOverlayAnimations();
           playSlap();
         }
         try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
@@ -1571,6 +1828,8 @@ function init() {
     canvas.addEventListener('pointercancel', (e) => {
       if (dragging) {
         dragging = false;
+        // 通知 Rust：拖拽结束
+        invoke('set_window_dragging', { dragging: false });
         try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
       }
     });
@@ -1600,6 +1859,16 @@ function init() {
   loadWaterState();
   scheduleWaterReminder();
   startStretchReminder();
+
+  // 点击穿透：每 ~100ms 扫描 canvas 非透明像素包围盒并上报 Rust，
+  // Rust 光标轮询据此动态切换 set_ignore_cursor_events（透明区穿透、猫体可交互）。
+  reportPetHitbox();
+  setInterval(reportPetHitbox, 100);
+
+  // 语录轮播：启动 4 秒后显示第一条（立即能看到效果），之后每 15 分钟换一条、
+  // 每条显示 1 分钟。
+  setTimeout(showQuote, 4000);
+  setInterval(showQuote, QUOTE_INTERVAL_MS);
 
   // 拖拽方向感知形变主循环：rAF 常驻，拖动时计算形变写 wrapper transform。
   requestAnimationFrame(dragLoop);

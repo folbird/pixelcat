@@ -17,6 +17,20 @@ use tauri_nspanel::{tauri_panel, PanelLevel, StyleMask, WebviewWindowExt};
 struct AppWindow(Mutex<Option<WebviewWindow>>);
 struct PanelExpanded(Mutex<bool>);
 
+/// 小猫在窗口内的命中矩形（逻辑像素，相对窗口左上角）。
+/// 由前端每 ~100ms 上报（canvas 非透明像素包围盒 → 屏幕坐标映射）。
+/// 用于"点击穿透"：光标落在猫上 → 关闭穿透（可交互）；否则 → 开启穿透
+/// （窗口透明区域不拦截鼠标，下层应用可正常点击）。
+struct CatHitbox(Mutex<Option<(f64, f64, f64, f64)>>);
+
+/// 是否正在拖拽窗口：拖拽期间光标可能瞬时划过透明区，必须保持可交互。
+/// 前端 pointerdown 置 true，pointerup/pointercancel 置 false。
+struct WindowDragging(Mutex<bool>);
+
+/// 当前是否处于"点击穿透"（set_ignore_cursor_events(true)）状态。
+/// 避免每帧重复切换（切一次会重建 WebView 鼠标跟踪）。
+struct CursorPassThrough(Mutex<bool>);
+
 /// 「窗口置顶」开关状态。右键菜单与 Tray 菜单共享同一份状态。
 struct AlwaysOnTop(Mutex<bool>);
 
@@ -120,6 +134,9 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
                     let cursor = unsafe { CGEventGetLocation(event) };
                     unsafe { CFRelease(event) };
 
+                    // 点击穿透：光标不在猫上 → 窗口透明区让鼠标穿透到下层应用。
+                    update_cursor_passthrough(&window, cursor.x, cursor.y);
+
                     // 左键按下状态：拖动窗口时 WebView 收不到 pointerup，
                     // 前端靠这里同步「是否仍在拖拽」。
                     let left_down = unsafe { CGEventSourceButtonState(0, 0) };
@@ -143,6 +160,60 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
             });
         }
     });
+}
+
+// ============================================================
+// 点击穿透（click-through）：窗口透明区域不拦截鼠标
+// ============================================================
+// 原理：前端每 ~100ms 上报「猫在窗口内的命中矩形」（canvas 非透明像素包围盒，
+// CSS 逻辑像素）；本函数每 16ms（光标轮询线程主线程闭包）判断光标是否落在该
+// 矩形内，动态切换 set_ignore_cursor_events：
+//   - 光标在猫上 或 正在拖拽（左键按下）→ 关闭穿透（ignore=false），可交互；
+//   - 光标落在透明区 → 开启穿透（ignore=true），鼠标点击直接穿透到下层应用。
+// 为什么不能在 JS 里做：穿透开启时 WebView 收不到任何鼠标事件，只能由 Rust 侧
+// 独立轮询光标来判定。
+fn update_cursor_passthrough(window: &tauri::WebviewWindow, screen_x: f64, screen_y: f64) {
+    let app_handle = window.app_handle();
+    let dragging = *app_handle.state::<WindowDragging>().0.lock().unwrap();
+    let hitbox = *app_handle.state::<CatHitbox>().0.lock().unwrap();
+
+    let current_ignore = *app_handle.state::<CursorPassThrough>().0.lock().unwrap();
+
+    // 坐标约定：screen_x/screen_y 为「屏幕逻辑像素」；hitbox 由前端用
+    // outerPosition（物理）÷ scale_factor + getBoundingClientRect（逻辑）换算成
+    // 屏幕逻辑坐标上报。两者同基准，直接比较即可，避免窗口原点/DPI 换算偏差。
+    let inside = if dragging || left_button_down() {
+        // 拖拽中或左键按下：保持可交互（即使瞬时划过透明区也不穿透）
+        true
+    } else if let Some((hx, hy, hw, hh)) = hitbox {
+        screen_x >= hx
+            && screen_x < hx + hw
+            && screen_y >= hy
+            && screen_y < hy + hh
+    } else {
+        true // hitbox 还没上报（启动瞬间）→ 保持可交互，避免刚启动就点不动
+    };
+
+    let want_ignore = !inside;
+    if want_ignore != current_ignore {
+        let _ = window.set_ignore_cursor_events(want_ignore);
+        *app_handle.state::<CursorPassThrough>().0.lock().unwrap() = want_ignore;
+    }
+}
+
+// 左键是否正在按下（macOS/Windows 各自实现，见 start_refresh_loop）。
+#[cfg(target_os = "macos")]
+fn left_button_down() -> bool {
+    unsafe { CGEventSourceButtonState(0, 0) }
+}
+#[cfg(windows)]
+fn left_button_down() -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    (unsafe { GetAsyncKeyState(0x01) } & i16::MIN) != 0
+}
+#[cfg(not(any(target_os = "macos", windows)))]
+fn left_button_down() -> bool {
+    false
 }
 
 // ========== Windows 光标轮询（驱动眼睛转动 + 身体形变） ==========
@@ -169,6 +240,11 @@ fn start_refresh_loop(app_handle: tauri::AppHandle) {
                     if ok == 0 {
                         return;
                     }
+                    // 点击穿透：光标不在猫上 → 窗口透明区让鼠标穿透到下层应用。
+                    // GetCursorPos 返回物理像素，统一换算成屏幕逻辑像素再判定。
+                    let cscale = window.scale_factor().unwrap_or(1.0);
+                    update_cursor_passthrough(&window, point.x as f64 / cscale, point.y as f64 / cscale);
+
                     // 左键是否按下（VK_LBUTTON = 0x01）：拖动时同步"仍在拖拽"。
                     // GetAsyncKeyState 返回 i16，用 i16::MIN（=-32768，即 0x8000 高位）
                     // 检测最高位是否为 1（键被按下）；0x8000i16 字面量会溢出，不能用。
@@ -501,6 +577,31 @@ fn sync_pin_checks(app: &tauri::AppHandle, pinned: bool) {
     }
 }
 
+/// 前端上报「猫在窗口内的命中矩形」（逻辑像素，相对窗口左上角）。
+/// 由 canvas 非透明像素包围盒计算，每 ~100ms 上报一次；Rust 侧据此动态
+/// 切换 set_ignore_cursor_events，实现"透明区穿透、猫体可交互"。
+#[tauri::command]
+fn set_pet_hitbox(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    state: tauri::State<'_, CatHitbox>,
+) {
+    let mut guard = state.0.lock().unwrap();
+    *guard = if width > 0.0 && height > 0.0 {
+        Some((x, y, width, height))
+    } else {
+        None
+    };
+}
+
+/// 前端通知是否正在拖拽窗口（pointerdown=true / pointerup|pointercancel=false）。
+#[tauri::command]
+fn set_window_dragging(dragging: bool, state: tauri::State<'_, WindowDragging>) {
+    *state.0.lock().unwrap() = dragging;
+}
+
 #[tauri::command]
 fn keep_on_top(state: tauri::State<'_, AppWindow>) {
     #[cfg(target_os = "macos")]
@@ -606,6 +707,9 @@ pub fn run() {
     builder
         .manage(AppWindow(Mutex::new(None)))
         .manage(PanelExpanded(Mutex::new(false)))
+        .manage(CatHitbox(Mutex::new(None)))
+        .manage(WindowDragging(Mutex::new(false)))
+        .manage(CursorPassThrough(Mutex::new(false)))
         .manage(AlwaysOnTop(Mutex::new(true)))
         .manage(TrayPinItem(Mutex::new(None)))
         .manage(StartupEnabled(Mutex::new(startup_enabled())))
@@ -615,7 +719,9 @@ pub fn run() {
             make_panel_key,
             set_panel_expanded,
             show_water_log,
-            hide_water_log
+            hide_water_log,
+            set_pet_hitbox,
+            set_window_dragging
         ])
         .on_menu_event(menu_event_handler)
         .setup(|app| {
