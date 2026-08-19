@@ -1316,6 +1316,10 @@ function openSettingsDialog(mode, onOk) {
   if (!settingsDialog) return;
   settingsMode = mode;
   settingsOnOk = onOk;
+  // macOS NSPanel 默认非激活（nonactivating）：右键菜单触发本弹窗后，
+  // 面板可能已失活 → 输入框点得进去但键盘焦点进不了 WebView。
+  // 这里强制让面板重新成为 key window，保证「间隔/毫升数」可正常输入。
+  invoke('make_panel_key', {});
   const row2 = document.getElementById('settings-row2');
   const input2 = document.getElementById('settings-input2');
   if (mode === 'water') {
@@ -1386,6 +1390,10 @@ function confirmSettings() {
 }
 
 if (settingsDialog && settingsOk && settingsCancel) {
+  // OK/× 按钮：按下瞬间播放点击音效（pointerdown 提前，跟手同步）——与
+  // 名字输入框交互一致，保证设置框确认时有反馈音。
+  settingsOk.addEventListener('pointerdown', () => playMouseClick());
+  settingsCancel.addEventListener('pointerdown', () => playMouseClick());
   settingsOk.addEventListener('click', confirmSettings);
   settingsCancel.addEventListener('click', closeSettingsDialog);
   settingsInput.addEventListener('keydown', (e) => {
@@ -1416,6 +1424,8 @@ function setPetName(name) {
 // 打开名字弹窗：窗口固定 300×340 永不移动，输入框直接在猫正下方显示。
 function openNameDialog() {
   if (!nameDialog || !nameInput) return;
+  // 同样让面板重新成为 key window（保证名字输入框可聚焦打字）
+  invoke('make_panel_key', {});
   nameInput.value = getPetName();
   nameDialog.classList.add('open');
   nameInput.focus();
