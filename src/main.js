@@ -1171,6 +1171,7 @@ function reportPetHitbox() {
   //   - 番茄钟运行中（pomodoro-active，暂停/取消按钮可见）
   // 此时上报「整窗矩形」→ Rust 判定光标永在窗口内 → 关闭穿透。
   const uiBlocking =
+    isOverlayActive() || // 喝水/拉伸动画播放期间整窗可交互：Windows 上保证点击必达
     (catDialog && catDialog.classList.contains('open')) ||
     (nameDialog && nameDialog.classList.contains('open')) ||
     (settingsDialog && settingsDialog.classList.contains('open')) ||
@@ -1631,9 +1632,10 @@ function handleWaterDrink(force) {
         saveWaterState();
         showToast(`💧 咕咚！已喝 ${WATER_DRINK_ML}ml`);
       }
-      // 打卡 = 喝 ml，记录进图表面板；同时播放喝水循环动画（提醒触发后
-      // 一直循环到用户再次点击停止）。
-      startDrinkAnimation();
+      // 打卡完成：记录已写入图表面板，停止喝水覆盖动画并移除光晕，
+      // 恢复待机状态（喝水/拉伸点击一次即停止，不再继续循环）。
+      document.body.classList.remove('water-active');
+      stopDrinkAnimation();
       return true;
     }
   }
@@ -1931,24 +1933,24 @@ function init() {
     });
     // 松开：结束拖拽，形变靠 dragLoop 物理阻尼回位
     canvas.addEventListener('pointerup', (e) => {
-      if (dragging) {
-        dragging = false;
-        // 通知 Rust：拖拽结束
-        invoke('set_window_dragging', { dragging: false });
-        if (dragMoved) {
-          // 拖动过 → 完全无声
-          stopSlap();
-        } else if (shouldDrinkOnClick()) {
-          // 提醒气泡期间点击猫 = 喝水打卡（按设定 ml 记录进图表面板 + 循环动画）
-          handleWaterDrink(true);
-        } else {
-          // 普通点击猫：先停止喝水/拉伸循环动画（提醒触发后一直循环到用户点击），
-          // 再播放 slap 敲击音。
-          stopOverlayAnimations();
-          playSlap();
-        }
-        try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+      // 注意：点击处理不依赖 dragging 标志——Windows 上 pointerdown 若因
+      // 穿透/时序问题未设上 dragging，点击也应正常生效（喝/拉伸动画停止恢复待机）。
+      if (dragging) dragging = false;
+      // 通知 Rust：拖拽结束
+      invoke('set_window_dragging', { dragging: false });
+      if (dragMoved) {
+        // 拖动过 → 完全无声
+        stopSlap();
+      } else if (shouldDrinkOnClick()) {
+        // 提醒气泡期间点击猫 = 喝水打卡（按设定 ml 记录进图表面板 + 恢复待机）
+        handleWaterDrink(true);
+      } else {
+        // 普通点击猫：先停止喝水/拉伸循环动画（提醒触发后一直循环到用户点击），
+        // 再播放 slap 敲击音。
+        stopOverlayAnimations();
+        playSlap();
       }
+      try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
     });
     // 兜底：指针丢失（如系统取消）也结束拖拽
     canvas.addEventListener('pointercancel', (e) => {
