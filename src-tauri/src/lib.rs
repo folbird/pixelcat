@@ -610,6 +610,9 @@ struct AudioStream {
 // 同一视频再次播放/切换直接命中秒开，避免每次都重新跑 yt-dlp。
 static AUDIO_CACHE: Mutex<Option<HashMap<String, AudioStream>>> = Mutex::new(None);
 
+// 搜索结果缓存：key = 搜索关键词（小写）。同一关键词不重复搜索，直接返回缓存。
+static SEARCH_CACHE: Mutex<Option<HashMap<String, Vec<SearchItem>>>> = Mutex::new(None);
+
 /// 把 "2:15" / "1:02:33" 解析为秒数。
 fn parse_duration(s: &str) -> u64 {
     let parts: Vec<&str> = s.trim().split(':').collect();
@@ -647,6 +650,16 @@ fn ytdlp_cmd() -> Command {
 
 #[command]
 async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
+    // 命中缓存直接返回（同一关键词秒回）
+    let cache_key = query.trim().to_lowercase();
+    if let Ok(guard) = SEARCH_CACHE.lock() {
+        if let Some(map) = guard.as_ref() {
+            if let Some(hit) = map.get(&cache_key) {
+                return Ok(hit.clone());
+            }
+        }
+    }
+
     let output = ytdlp_cmd()
         .args([
             &format!("ytsearch5:{}", query),
@@ -661,8 +674,6 @@ async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
             "--no-playlist",
             "--js-runtimes",
             "node",
-            "--remote-components",
-            "ejs:github",
         ])
         .output()
         .map_err(|e| format!("yt-dlp 执行失败: {}", e))?;
@@ -692,6 +703,11 @@ async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
         });
         i += 4;
     }
+    // 写入搜索缓存，同一关键词下次秒回
+    if let Ok(mut guard) = SEARCH_CACHE.lock() {
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.insert(cache_key, items.clone());
+    }
     Ok(items)
 }
 
@@ -709,8 +725,6 @@ async fn get_video_title(url: String) -> Result<String, String> {
             "--no-playlist",
             "--js-runtimes",
             "node",
-            "--remote-components",
-            "ejs:github",
             &full_url,
         ])
         .output()
@@ -767,8 +781,6 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
             "--no-playlist",
             "--js-runtimes",
             "node",
-            "--remote-components",
-            "ejs:github",
             &full_url,
         ])
         .output()
