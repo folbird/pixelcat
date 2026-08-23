@@ -600,6 +600,9 @@ struct AudioStream {
     url: String,
     title: String,
     author: String,
+    /// 视频真实时长（秒），由 yt-dlp 提供。WebKit 的 audio.duration 对某些流
+    /// 读取不准（如 4 分钟被读成 8 分钟），前端应优先用本字段显示总时长。
+    duration: u64,
 }
 
 /// 把 "2:15" / "1:02:33" 解析为秒数。
@@ -710,13 +713,18 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
     let output = Command::new("yt-dlp")
         .args([
             "-f",
-            "bestaudio",
+            // 优先 m4a/AAC（WebKit 对 AAC 的 seek 支持完善），回退到其他音频。
+            // 注意：不能用 webm/opus，Tauri 的 WebKit 对 opus 流 seek（拖动进度条）后
+            // 缓冲恢复支持差 → 跳到中间会无声。m4a 是最稳的。
+            "bestaudio[ext=m4a]/bestaudio",
             "--print",
             "title",
             "--print",
             "url",
             "--print",
             "uploader",
+            "--print",
+            "duration",
             "--no-playlist",
             "--js-runtimes",
             "node",
@@ -734,12 +742,17 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines = stdout.lines();
-    // yt-dlp --print 顺序：title | url | uploader
+    // yt-dlp --print 顺序：title | url | uploader | duration
     let title = lines.next().ok_or("未获取到标题")?.trim().to_string();
     let audio_url = lines.next().ok_or("未获取到音频URL")?.trim().to_string();
     let author = lines.next().unwrap_or("").trim().to_string();
+    let duration_str = lines.next().unwrap_or("0").trim();
+    // duration 可能是纯秒数（如 "240"）或 "4:00" / "1:02:33" 格式
+    let duration: u64 = duration_str
+        .parse()
+        .unwrap_or_else(|_| parse_duration(duration_str));
 
-    Ok(AudioStream { url: audio_url, title, author })
+    Ok(AudioStream { url: audio_url, title, author, duration })
 }
 
 /// 显示/隐藏独立音乐播放器窗口（macOS 上转成 NSPanel，其他平台直接显示/隐藏）。

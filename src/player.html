@@ -654,9 +654,12 @@
         // ======= 播放列表（localStorage 持久化） =======
         const STORAGE_KEY = 'comnyang_player_playlist';
         const DEFAULT_PLAYLIST = [
-            { url: 'https://youtube.com/watch?v=TcLLpZBWsck', title: '' },
-            { url: 'https://youtube.com/watch?v=rW8g9dmmrmg', title: '' },
-            { url: 'https://youtube.com/watch?v=Sw70xpKFMMQ', title: '' },
+            { url: 'https://youtube.com/watch?v=TcLLpZBWsck', title: 'Fujii Kaze - Kirari (Official Video)' },
+            { url: 'https://youtube.com/watch?v=rW8g9dmmrmg', title: 'The Way I Still Love You' },
+            { url: 'https://youtube.com/watch?v=Sw70xpKFMMQ', title: '【中文字幕】強風吹拂ED1「リセット」by 向井太一' },
+            { url: 'https://youtube.com/watch?v=Dx_fKPBPYUI', title: '米津玄師 - LOSER, Kenshi Yonezu' },
+            { url: 'https://youtube.com/watch?v=CB1ws_nXDXU', title: '◆ 我也曾經想過一了百了｜中島美嘉 - 僕が死のうと思ったのは' },
+            { url: 'https://youtube.com/watch?v=HVBnpC1b_5Y', title: 'Cry For Me (feat. 愛海)' },
         ];
 
         function loadPlaylist() {
@@ -848,6 +851,20 @@
         // ======= 音频控制 =======
         let isPlaying = false;
         let statusTimer = null;
+        // 当前曲目真实时长（秒），来自后端 yt-dlp。WebKit 的 audio.duration 对某些
+        // 流读取不准（如 4 分钟被读成 8 分钟），因此用后端提供的真实时长做显示/进度。
+        let trackDuration = 0;
+
+        // 秒 → "m:ss"（支持超过 1 小时）
+        function formatTime(secs) {
+            secs = Math.max(0, Math.floor(secs || 0));
+            const h = Math.floor(secs / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            const s = secs % 60;
+            const mm = h > 0 ? m.toString().padStart(2, '0') : m.toString();
+            const ss = s.toString().padStart(2, '0');
+            return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+        }
 
         // 显示状态消息：成功消息 4 秒后自动消失；失败消息保留
         function showStatus(msg, isError) {
@@ -863,21 +880,21 @@
         }
 
         function updateProgress() {
-            if (audio.duration && !isNaN(audio.duration)) {
-                const percent = (audio.currentTime / audio.duration) * 100;
+            // 优先用后端真实时长；未取得时回退到 audio.duration。
+            const dur = trackDuration > 0 ? trackDuration : audio.duration;
+            if (dur && !isNaN(dur)) {
+                const percent = (audio.currentTime / dur) * 100;
                 progressFill.style.width = percent + '%';
-                const mins = Math.floor(audio.currentTime / 60);
-                const secs = Math.floor(audio.currentTime % 60);
-                currentTimeEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                currentTimeEl.textContent = formatTime(audio.currentTime);
             }
         }
 
         audio.addEventListener('timeupdate', updateProgress);
         audio.addEventListener('loadedmetadata', function () {
-            if (audio.duration && !isNaN(audio.duration)) {
-                const mins = Math.floor(audio.duration / 60);
-                const secs = Math.floor(audio.duration % 60);
-                totalTimeEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            // 优先用后端真实时长（trackDuration）；回退到 audio.duration。
+            const dur = trackDuration > 0 ? trackDuration : audio.duration;
+            if (dur && !isNaN(dur)) {
+                totalTimeEl.textContent = formatTime(dur);
             }
         });
         audio.addEventListener('ended', function () {
@@ -938,11 +955,13 @@
                 audio.load();
                 song.title = result.title;
                 savePlaylist();
+                // 记录后端真实时长（WebKit 的 audio.duration 不可靠）
+                trackDuration = result.duration || 0;
                 songTitle.textContent = result.title.toUpperCase();
                 artistName.textContent = result.author || '';
                 progressFill.style.width = '0%';
                 currentTimeEl.textContent = '0:00';
-                totalTimeEl.textContent = '0:00';
+                totalTimeEl.textContent = trackDuration > 0 ? formatTime(trackDuration) : '0:00';
                 showStatus('加载成功，自动播放', false);
                 audio.play().catch(() => {});
                 updatePlaylistModal();
@@ -975,31 +994,41 @@
             const x = (e.clientX || e.pageX) - rect.left;
             return Math.max(0, Math.min(100, (x / rect.width) * 100));
         }
-        function setProgress(percent) {
-            if (audio.duration && !isNaN(audio.duration)) {
-                audio.currentTime = (percent / 100) * audio.duration;
-                updateProgress();
+        // 仅更新 UI（进度条 + 当前时间），不触发 seek。
+        function previewProgress(percent) {
+            const dur = trackDuration > 0 ? trackDuration : audio.duration;
+            if (!dur || isNaN(dur)) return;
+            progressFill.style.width = percent + '%';
+            const secsTotal = (percent / 100) * dur;
+            currentTimeEl.textContent = formatTime(secsTotal);
+        }
+        // 真正 seek 到指定百分比（只在松手时调用一次）。
+        function seekTo(percent) {
+            const dur = trackDuration > 0 ? trackDuration : audio.duration;
+            if (dur && !isNaN(dur)) {
+                audio.currentTime = (percent / 100) * dur;
             }
+            updateProgress();
         }
         progressTrack.addEventListener('mousedown', function (e) {
             isDragging = true;
-            setProgress(getPercent(e));
+            previewProgress(getPercent(e));
             e.preventDefault();
         });
         document.addEventListener('mousemove', function (e) {
             if (!isDragging) return;
-            setProgress(getPercent(e));
+            previewProgress(getPercent(e));
             e.preventDefault();
         });
         document.addEventListener('mouseup', function (e) {
             if (isDragging) {
                 isDragging = false;
-                setProgress(getPercent(e));
+                seekTo(getPercent(e)); // 松手时只真正 seek 一次，避免反复缓冲
             }
         });
         progressTrack.addEventListener('click', function (e) {
             if (!isDragging) {
-                setProgress(getPercent(e));
+                seekTo(getPercent(e));
             }
         });
 
@@ -1067,11 +1096,12 @@
                 const result = await invoke('get_audio_stream', { url });
                 audio.src = result.url;
                 audio.load();
+                trackDuration = result.duration || 0;
                 songTitle.textContent = result.title.toUpperCase();
                 artistName.textContent = result.author || '';
                 progressFill.style.width = '0%';
                 currentTimeEl.textContent = '0:00';
-                totalTimeEl.textContent = '0:00';
+                totalTimeEl.textContent = trackDuration > 0 ? formatTime(trackDuration) : '0:00';
                 showStatus('加载成功，自动播放', false);
                 audio.play().catch(() => {});
                 searchResults.innerHTML = '';
