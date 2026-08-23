@@ -847,6 +847,20 @@
 
         // ======= 音频控制 =======
         let isPlaying = false;
+        let statusTimer = null;
+
+        // 显示状态消息：成功消息 4 秒后自动消失；失败消息保留
+        function showStatus(msg, isError) {
+            statusMsg.textContent = msg;
+            statusMsg.style.color = isError ? '#e63946' : '#888';
+            if (statusTimer) clearTimeout(statusTimer);
+            if (!isError) {
+                statusTimer = setTimeout(function() {
+                    statusMsg.textContent = '';
+                    statusMsg.style.color = '#888';
+                }, 4000);
+            }
+        }
 
         function updateProgress() {
             if (audio.duration && !isNaN(audio.duration)) {
@@ -917,7 +931,7 @@
             if (index < 0 || index >= playlist.length) return;
             const song = playlist[index];
             currentIndex = index;
-            statusMsg.textContent = '获取音频流...';
+            showStatus('获取音频流...', false);
             try {
                 const result = await invoke('get_audio_stream', { url: song.url });
                 audio.src = result.url;
@@ -925,16 +939,16 @@
                 song.title = result.title;
                 savePlaylist();
                 songTitle.textContent = result.title.toUpperCase();
-                artistName.textContent = '♪ 在线播放';
+                artistName.textContent = result.author || '';
                 progressFill.style.width = '0%';
                 currentTimeEl.textContent = '0:00';
                 totalTimeEl.textContent = '0:00';
-                statusMsg.textContent = '加载成功，自动播放';
+                showStatus('加载成功，自动播放', false);
                 audio.play().catch(() => {});
                 updatePlaylistModal();
             } catch (error) {
-                statusMsg.textContent = '加载失败: ' + error;
                 console.error(error);
+                showStatus('加载失败: ' + error, true);
             }
         }
 
@@ -1048,22 +1062,22 @@
             if (foundIndex !== -1) {
                 currentIndex = foundIndex;
             }
-            statusMsg.textContent = '获取音频流...';
+            showStatus('获取音频流...', false);
             try {
                 const result = await invoke('get_audio_stream', { url });
                 audio.src = result.url;
                 audio.load();
                 songTitle.textContent = result.title.toUpperCase();
-                artistName.textContent = '♪ 在线播放';
+                artistName.textContent = result.author || '';
                 progressFill.style.width = '0%';
                 currentTimeEl.textContent = '0:00';
                 totalTimeEl.textContent = '0:00';
-                statusMsg.textContent = '加载成功，自动播放';
+                showStatus('加载成功，自动播放', false);
                 audio.play().catch(() => {});
                 searchResults.innerHTML = '';
             } catch (error) {
-                statusMsg.textContent = '加载失败: ' + error;
                 console.error(error);
+                showStatus('加载失败: ' + error, true);
             }
         }
 

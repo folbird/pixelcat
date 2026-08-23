@@ -599,6 +599,7 @@ struct SearchItem {
 struct AudioStream {
     url: String,
     title: String,
+    author: String,
 }
 
 /// 把 "2:15" / "1:02:33" 解析为秒数。
@@ -616,9 +617,14 @@ async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
     let output = Command::new("yt-dlp")
         .args([
             &format!("ytsearch5:{}", query),
-            "--get-id",
-            "--get-title",
-            "--get-duration",
+            "--print",
+            "id",
+            "--print",
+            "title",
+            "--print",
+            "duration",
+            "--print",
+            "uploader",
             "--no-playlist",
             "--js-runtimes",
             "node",
@@ -637,19 +643,21 @@ async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
     let lines: Vec<&str> = stdout.lines().collect();
     let mut items = Vec::new();
     let mut i = 0;
-    // yt-dlp outputs: title, id, duration (per video)
-    while i + 2 < lines.len() {
-        let title = lines[i].trim().to_string();
-        let video_id = lines[i + 1].trim().to_string();
-        let duration = parse_duration(lines[i + 2]);
+    // yt-dlp --print 输出顺序：id, title, duration, uploader（每视频 4 行）
+    while i + 3 < lines.len() {
+        let video_id = lines[i].trim().to_string();
+        let title = lines[i + 1].trim().to_string();
+        let duration_str = lines[i + 2].trim();
+        let duration: u64 = duration_str.parse().unwrap_or_else(|_| parse_duration(duration_str));
+        let author = lines[i + 3].trim().to_string();
         items.push(SearchItem {
             video_id,
             title,
-            author: String::new(),
+            author,
             duration,
             thumbnail: None,
         });
-        i += 3;
+        i += 4;
     }
     Ok(items)
 }
@@ -703,8 +711,12 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
         .args([
             "-f",
             "bestaudio",
-            "--get-url",
-            "--get-title",
+            "--print",
+            "title",
+            "--print",
+            "url",
+            "--print",
+            "uploader",
             "--no-playlist",
             "--js-runtimes",
             "node",
@@ -722,11 +734,12 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines = stdout.lines();
-    // yt-dlp outputs: title | url
+    // yt-dlp --print 顺序：title | url | uploader
     let title = lines.next().ok_or("未获取到标题")?.trim().to_string();
     let audio_url = lines.next().ok_or("未获取到音频URL")?.trim().to_string();
+    let author = lines.next().unwrap_or("").trim().to_string();
 
-    Ok(AudioStream { url: audio_url, title })
+    Ok(AudioStream { url: audio_url, title, author })
 }
 
 /// 显示/隐藏独立音乐播放器窗口（macOS 上转成 NSPanel，其他平台直接显示/隐藏）。
