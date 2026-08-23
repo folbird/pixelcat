@@ -40,17 +40,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # 下载捆绑的 yt-dlp sidecar 二进制（构建需 externalBin，用户无需安装 Python/yt-dlp）
-      - name: Download bundled yt-dlp (macOS)
-        if: matrix.platform == 'macos-latest'
-        shell: bash
-        run: |
-          mkdir -p src-tauri/bin
-          curl -sL -o src-tauri/bin/yt-dlp-aarch64-apple-darwin \
-            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
-          chmod +x src-tauri/bin/yt-dlp-aarch64-apple-darwin
-          src-tauri/bin/yt-dlp-aarch64-apple-darwin --version
-
       - name: Download bundled yt-dlp (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
@@ -59,6 +48,11 @@ jobs:
           curl -sL -o src-tauri/bin/yt-dlp-x86_64-pc-windows-msvc.exe \
             https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
           src-tauri/bin/yt-dlp-x86_64-pc-windows-msvc.exe --version
+
+      # macOS：不捆绑 yt-dlp。macOS 的 yt-dlp_macos 单文件版缺少内置 JS 运行时，
+      # 搜索会走慢速降级路径（实测 ~22s，远超系统版 ~5s）；而完整版(zip)是目录结构，
+      # Tauri externalBin 无法捆绑目录。macOS 用户系统普遍已有 Python yt-dlp，
+      # 用系统版最快。因此 macOS 直接跳过下载，Rust 的 ytdlp_cmd() 会自动回退到系统 yt-dlp。
 
       - name: Build Tauri app (debug output)
         id: build
