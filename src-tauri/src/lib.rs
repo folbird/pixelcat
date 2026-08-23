@@ -623,13 +623,19 @@ fn parse_duration(s: &str) -> u64 {
     seconds
 }
 
-/// 返回 yt-dlp 命令。优先使用随应用捆绑的 sidecar 二进制（Tauri externalBin
-/// 会把 sidecar 放在可执行文件同目录：Windows 为 `yt-dlp.exe`，macOS 为
-/// `Contents/MacOS/yt-dlp`；也兼容某些情况下的 `bin/` 子目录），找不到时才
-/// 回退到系统 PATH 中的 `yt-dlp`。这样打包后用户无需安装 yt-dlp/Python。
+/// 返回 yt-dlp 命令。**仅发布版（release，即打包后的应用）**使用随应用捆绑的
+/// sidecar 二进制（Tauri externalBin 放在可执行文件同目录：Windows 为
+/// `yt-dlp.exe`，macOS 为 `Contents/MacOS/yt-dlp`；也兼容 `bin/` 子目录）。
+/// 开发/调试模式（debug）一律用系统 PATH 中的 `yt-dlp`，避免 target 目录里的
+/// 残留/慢速二进制干扰（否则可能误用捆绑的单文件版导致搜索 20s+）。
 fn ytdlp_cmd() -> Command {
+    // debug 构建（开发调试）→ 直接走系统 yt-dlp
+    if cfg!(debug_assertions) {
+        return std::process::Command::new("yt-dlp");
+    }
+
     let mut cmd = std::process::Command::new("yt-dlp");
-    // 当前可执行文件目录（Windows: exe 所在目录；macOS: Contents/MacOS/）
+    // 仅 release 模式才尝试使用捆绑 sidecar
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let sidecar_name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
