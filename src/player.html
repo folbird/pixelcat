@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>像素音乐播放器</title>
+    <title>像素播放器</title>
     <style>
         @font-face {
             font-family: "ArkPixel12";
@@ -19,99 +19,89 @@
         html, body {
             width: 100%;
             height: 100%;
-            background: transparent; /* 窗口透明，只显示播放器面板 */
+            background: transparent;
             overflow: hidden;
             font-family: "ArkPixel12CN", "ArkPixel12", monospace;
             image-rendering: pixelated;
             user-select: none;
         }
 
-        /* 播放器面板：唯一不透明的区域 */
+        /* ===== 播放器面板（暗黑像素风，my-player 原版 UI） ===== */
         .player {
-            background: #f5f5f5;
+            background: #0a0a0a;
             padding: 20px 18px 14px 18px;
-            border: 4px solid #dddddd;
-            border-top-color: #eeeeee;
-            border-left-color: #eeeeee;
-            border-bottom-color: #bbbbbb;
-            border-right-color: #bbbbbb;
-            border-radius: 10px;
-            box-shadow:
-                inset -3px -3px 0 #cccccc,
-                inset 3px 3px 0 #ffffff,
-                0 6px 0 #bbbbbb,
-                0 10px 20px rgba(0,0,0,0.25);
+            border: 4px solid #1a1a1a;
+            border-top-color: #2a2a2a;
+            border-left-color: #2a2a2a;
+            border-bottom-color: #000;
+            border-right-color: #000;
+            box-shadow: inset -4px -4px 0 #000, inset 4px 4px 0 #2a2a2a, 0 8px 0 #000, 0 12px 24px rgba(0,0,0,0.9);
             max-width: 420px;
             width: calc(100% - 20px);
             position: absolute;
             top: 10px;
             left: 50%;
             transform: translateX(-50%);
-            margin: 0 auto;
+            cursor: default;
         }
 
-        /* 退出按钮：右上角 */
-        #closeBtn {
+        /* 窗口控制按钮：- 最小化（后台播放）/ ✕ 完全退出 */
+        #minimizeBtn, #closeBtn {
             position: absolute;
             top: 8px;
-            right: 8px;
-            width: 32px;
-            height: 32px;
+            z-index: 60;
+            width: 28px;
+            height: 28px;
             display: flex;
             align-items: center;
             justify-content: center;
+            background: #0a0a0a;
+            border: 3px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
+            color: #aaa;
             font-family: "ArkPixel12CN", "ArkPixel12", monospace;
             font-size: 14px;
             font-weight: 700;
-            color: #333;
-            background: #ffffff;
-            border: 3px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            border-radius: 6px;
             cursor: pointer;
-            box-shadow: inset -2px -2px 0 #bbbbbb;
-            z-index: 50;
+            box-shadow: inset -2px -2px 0 #000;
+            transition: all 0.03s step-end;
             line-height: 1;
-            transition: background 0.05s step-end, transform 0.03s step-end;
         }
-        #closeBtn:hover { background: #f0f0f0; color: #e63946; }
-        #closeBtn:active {
+        #minimizeBtn { right: 44px; }
+        #closeBtn { right: 8px; }
+        #minimizeBtn:hover, #closeBtn:hover { background: #1a1a1a; color: #00d4c0; }
+        #closeBtn:hover { color: #e63946; }
+        #minimizeBtn:active, #closeBtn:active {
             transform: translate(2px, 2px);
-            border-top-color: #aaaaaa;
-            border-left-color: #aaaaaa;
-            border-bottom-color: #dddddd;
-            border-right-color: #dddddd;
-            box-shadow: inset 2px 2px 0 #bbbbbb;
+            border-top-color: #111;
+            border-left-color: #111;
+            border-bottom-color: #555;
+            border-right-color: #555;
+            box-shadow: inset 2px 2px 0 #000;
         }
 
-        /* 标题栏拖拽区域 */
+        /* 拖拽区域：面板顶部一行 + 下方空白（data-tauri-drag-region 已加在 .player，空白拖动） */
         .title-bar {
-            -webkit-app-region: drag;
-            app-region: drag;
-            height: 20px;
-            margin-bottom: 8px;
+            height: 22px;
+            margin-bottom: 6px;
             display: flex;
             align-items: center;
             justify-content: center;
+            color: #555;
+            font-size: 8px;
+            letter-spacing: 3px;
             cursor: move;
-        }
-        .title-bar span {
-            font-size: 10px;
-            color: #999;
-            letter-spacing: 2px;
-            pointer-events: none;
         }
 
         .cover-art {
-            background: #e8e8e8;
+            background: #000;
             padding: 6px;
-            border: 3px solid #cccccc;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            border-radius: 4px;
+            border: 4px solid #1a1a1a;
+            border-bottom-color: #000;
+            border-right-color: #000;
             margin-bottom: 14px;
             display: flex;
             justify-content: center;
@@ -123,10 +113,9 @@
             gap: 2px;
             width: 100%;
             aspect-ratio: 16 / 8;
-            background: #eaeaea;
-            image-rendering: pixelated;
+            background: #050505;
         }
-        .px { background: #eaeaea; }
+        .px { background: #0a0a0a; }
         .px.dark-blue { background: #0b1b3a; }
         .px.mid-blue { background: #144a7a; }
         .px.cyan { background: #00d4c0; }
@@ -136,11 +125,10 @@
         .px.white { background: #f0e8f8; }
 
         .song-title {
-            color: #222222;
+            color: #f0e8f8;
             font-size: 15px;
-            font-family: "ArkPixel12CN", "ArkPixel12", monospace;
             font-weight: 700;
-            text-shadow: 2px 2px 0 #dddddd;
+            text-shadow: 3px 3px 0 #4a1a7a, -1px -1px 0 #00d4c0;
             margin-bottom: 4px;
             text-align: center;
             word-break: break-word;
@@ -148,10 +136,11 @@
             line-height: 1.35;
         }
         .artist {
-            color: #777;
+            color: #7a8ab8;
             font-size: 10px;
             text-align: center;
             margin-bottom: 14px;
+            text-shadow: 2px 2px 0 #0a0510;
         }
 
         .progress-area {
@@ -161,7 +150,7 @@
             margin-bottom: 14px;
         }
         .time {
-            color: #666;
+            color: #8a7aaa;
             font-size: 10px;
             min-width: 34px;
         }
@@ -169,14 +158,14 @@
         .progress-track {
             flex: 1;
             height: 16px;
-            background: #eaeaea;
-            border: 3px solid #cccccc;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
+            background: #0a0a0a;
+            border: 3px solid #2a2a2a;
+            border-bottom-color: #111;
+            border-right-color: #111;
             padding: 2px;
             display: flex;
             align-items: center;
-            box-shadow: inset 2px 2px 0 #bbbbbb;
+            box-shadow: inset 2px 2px 0 #000;
             cursor: pointer;
             position: relative;
         }
@@ -184,7 +173,7 @@
             height: 6px;
             width: 0%;
             background: #00d4c0;
-            box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #00d4c0;
+            box-shadow: 0 0 0 2px #0a0a0a, 0 0 0 4px #00d4c0;
             transition: width 0.05s steps(8);
             position: relative;
             pointer-events: none;
@@ -196,12 +185,13 @@
             top: -5px;
             width: 12px;
             height: 12px;
-            background: #222;
-            border: 2px solid #aaa;
-            box-shadow: 2px 2px 0 #bbbbbb;
+            background: #f0e8f8;
+            border: 2px solid #111;
+            box-shadow: 2px 2px 0 #000;
             pointer-events: none;
         }
 
+        /* 控制栏：按钮 + 📋 列表 同一行（与 my-player 一致） */
         .controls {
             display: flex;
             justify-content: center;
@@ -210,128 +200,117 @@
             margin-bottom: 12px;
         }
         .ctrl-btn {
-            background: #ffffff;
-            border: 3px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            color: #333;
+            background: #0a0a0a;
+            border: 3px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
+            color: #aaa;
             font-family: "ArkPixel12CN", "ArkPixel12", monospace;
-            font-size: 16px;
-            padding: 7px 10px;
-            min-width: 44px;
+            font-size: 15px;
+            padding: 6px 8px;
+            min-width: 40px;
             text-align: center;
             cursor: pointer;
-            box-shadow: inset -2px -2px 0 #bbbbbb;
+            box-shadow: inset -2px -2px 0 #000;
             transition: all 0.03s step-end;
             line-height: 1;
         }
-        .ctrl-btn:hover { background: #f0f0f0; color: #00d4c0; }
+        .ctrl-btn:hover { background: #1a1a1a; color: #00d4c0; }
         .ctrl-btn:active {
             transform: translate(3px, 3px);
-            border-top-color: #aaaaaa;
-            border-left-color: #aaaaaa;
-            border-bottom-color: #dddddd;
-            border-right-color: #dddddd;
-            box-shadow: inset 2px 2px 0 #bbbbbb;
+            border-top-color: #111;
+            border-left-color: #111;
+            border-bottom-color: #555;
+            border-right-color: #555;
+            box-shadow: inset 2px 2px 0 #000;
         }
-        .ctrl-btn.play {
-            font-size: 20px;
-            padding: 7px 14px;
-            background: #f0f0f0;
-            color: #00d4c0;
-            border-color: #cccccc;
-        }
+        .ctrl-btn.play { font-size: 18px; padding: 6px 12px; background: #1a1a1a; color: #00d4c0; border-color: #555; }
 
-        .footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-top: 6px;
-            border-top: 3px solid #cccccc;
-        }
         .list-badge {
             display: flex;
             align-items: center;
-            gap: 8px;
-            background: #ffffff;
-            padding: 5px 10px 5px 8px;
-            border: 3px solid #cccccc;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
+            gap: 6px;
+            background: #0a0a0a;
+            padding: 5px 8px 5px 7px;
+            border: 3px solid #333;
+            border-bottom-color: #111;
+            border-right-color: #111;
             font-size: 10px;
-            color: #333;
+            color: #aaa;
             cursor: pointer;
             transition: background 0.05s step-end;
+            margin-left: 2px;
+            text-shadow: 1px 1px 0 #000;
         }
-        .list-badge:hover { background: #f0f0f0; color: #00d4c0; }
+        .list-badge:hover { background: #1a1a1a; color: #00d4c0; }
         .list-badge:active {
             transform: translate(1px, 1px);
-            border-bottom-color: #cccccc;
-            border-right-color: #cccccc;
+            border-bottom-color: #333;
+            border-right-color: #333;
         }
+        .list-badge .label { color: #888; letter-spacing: 1px; }
         .list-badge .number {
-            background: #ffffff;
-            padding: 2px 7px;
-            border: 2px solid #cccccc;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
+            background: #0a0a0a;
+            padding: 1px 6px;
+            border: 2px solid #333;
+            border-bottom-color: #111;
+            border-right-color: #111;
             color: #00d4c0;
             font-size: 11px;
             font-weight: bold;
-            min-width: 18px;
+            min-width: 16px;
             text-align: center;
-            box-shadow: inset -1px -1px 0 #bbbbbb;
+            box-shadow: inset -1px -1px 0 #000;
         }
 
         .input-area {
-            margin-top: 12px;
-            border-top: 3px solid #cccccc;
-            border-top-color: #aaaaaa;
+            margin-top: 10px;
+            border-top: 4px solid #1a1a1a;
             padding-top: 10px;
         }
         .input-row {
             display: flex;
-            gap: 6px;
+            gap: 8px;
         }
         .input-row input {
             flex: 1;
-            background: #ffffff;
-            border: 3px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
+            background: #111;
+            border: 3px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
             padding: 6px 8px;
             font-family: "ArkPixel12CN", "ArkPixel12", monospace;
             font-size: 12px;
-            color: #222;
+            color: #eee;
             outline: none;
             min-width: 120px;
         }
         .input-row input:focus { border-color: #00d4c0; }
         .input-row button {
-            background: #ffffff;
-            border: 3px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            color: #333;
+            background: #0a0a0a;
+            border: 3px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
+            color: #aaa;
             font-family: "ArkPixel12CN", "ArkPixel12", monospace;
             font-size: 12px;
             padding: 6px 12px;
             cursor: pointer;
             transition: all 0.03s step-end;
         }
-        .input-row button:hover { background: #f0f0f0; color: #00d4c0; }
+        .input-row button:hover { background: #1a1a1a; color: #00d4c0; }
         .input-row button:active {
             transform: translate(2px, 2px);
-            border-top-color: #aaaaaa;
-            border-left-color: #aaaaaa;
-            border-bottom-color: #dddddd;
-            border-right-color: #dddddd;
+            border-top-color: #111;
+            border-left-color: #111;
+            border-bottom-color: #555;
+            border-right-color: #555;
         }
 
         .status {
@@ -352,29 +331,26 @@
             display: flex;
             align-items: center;
             gap: 6px;
-            color: #555;
+            color: #aaaaaa;
             font-size: 11px;
             line-height: 1.7;
             padding: 3px 6px;
-            border-bottom: 1px solid #dddddd;
+            border-bottom: 1px solid #222;
             cursor: pointer;
             transition: background 0.05s step-end, color 0.05s;
+            text-shadow: 1px 1px 0 #000;
         }
-        .search-results li:hover { background: #f0f0f0; color: #00d4c0; }
+        .search-results li:hover { background: #1a1a1a; color: #00d4c0; }
         .search-results li:last-child { border-bottom: none; }
-        .result-title {
-            flex: 1;
-            word-break: break-word;
-            font-size: 10px;
-        }
+        .result-title { flex: 1; word-break: break-word; font-size: 10px; }
         .add-btn {
-            background: #ffffff;
-            border: 2px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            color: #00a090;
+            background: #0a0a0a;
+            border: 2px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
+            color: #00d4c0;
             font-family: "ArkPixel12CN", "ArkPixel12", monospace;
             font-size: 12px;
             padding: 2px 6px;
@@ -383,119 +359,8 @@
             line-height: 1.4;
             transition: all 0.03s step-end;
         }
-        .add-btn:hover { background: #f0f0f0; color: #007a6e; }
-        .add-btn:active {
-            transform: translate(1px, 1px);
-            border-top-color: #aaaaaa;
-            border-left-color: #aaaaaa;
-            border-bottom-color: #dddddd;
-            border-right-color: #dddddd;
-        }
-
-        /* 弹窗 */
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.35);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 100;
-            backdrop-filter: blur(2px);
-        }
-        .modal-overlay.active { display: flex; }
-        .modal-box {
-            background: #f5f5f5;
-            border: 4px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            border-radius: 8px;
-            padding: 20px 16px 16px 16px;
-            max-width: 340px;
-            width: 92%;
-            box-shadow: inset -4px -4px 0 #bbbbbb, 0 12px 24px rgba(0,0,0,0.25);
-            position: relative;
-            max-height: 70vh;
-            overflow-y: auto;
-        }
-        .modal-title {
-            color: #222;
-            font-size: 13px;
-            font-weight: 700;
-            letter-spacing: 2px;
-            margin-bottom: 12px;
-            text-align: center;
-        }
-        .modal-list {
-            list-style: none;
-            padding: 0;
-            margin: 0 0 14px 0;
-        }
-        .modal-list li {
-            color: #333;
-            font-size: 10px;
-            line-height: 2.0;
-            padding: 3px 10px;
-            border-bottom: 2px solid #dddddd;
-            cursor: pointer;
-            transition: background 0.05s step-end, color 0.05s;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .modal-list li:hover { background: #f0f0f0; color: #00d4c0; }
-        .modal-list li:last-child { border-bottom: none; }
-        .modal-list li.current { color: #00d4c0; }
-        .modal-song-name { margin-right: 8px; }
-        .remove-btn {
-            background: #ffffff;
-            border: 2px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            color: #d060b0;
-            font-family: "ArkPixel12CN", "ArkPixel12", monospace;
-            font-size: 10px;
-            padding: 2px 6px;
-            cursor: pointer;
-            flex-shrink: 0;
-            line-height: 1.4;
-            float: right;
-            transition: all 0.03s step-end;
-        }
-        .remove-btn:hover { background: #f0f0f0; color: #b04090; }
-        .remove-btn:active { transform: translate(1px, 1px); }
-        .modal-close {
-            display: block;
-            margin: 0 auto;
-            background: #ffffff;
-            border: 3px solid #cccccc;
-            border-top-color: #dddddd;
-            border-left-color: #dddddd;
-            border-bottom-color: #aaaaaa;
-            border-right-color: #aaaaaa;
-            color: #333;
-            font-family: "ArkPixel12CN", "ArkPixel12", monospace;
-            font-size: 12px;
-            padding: 6px 20px;
-            cursor: pointer;
-            box-shadow: inset -2px -2px 0 #bbbbbb;
-            transition: all 0.03s step-end;
-        }
-        .modal-close:hover { background: #f0f0f0; color: #00d4c0; }
-        .modal-close:active {
-            transform: translate(2px, 2px);
-            border-top-color: #aaaaaa;
-            border-left-color: #aaaaaa;
-            border-bottom-color: #dddddd;
-            border-right-color: #dddddd;
-        }
+        .add-btn:hover { background: #1a1a1a; color: #6efff0; }
+        .add-btn:active { transform: translate(1px, 1px); }
 
         /* 扫描线 */
         .scanlines {
@@ -508,25 +373,171 @@
             background: repeating-linear-gradient(0deg,
                 rgba(0,0,0,0) 0px,
                 rgba(0,0,0,0) 3px,
-                rgba(0,0,0,0.04) 3px,
-                rgba(0,0,0,0.04) 4px);
+                rgba(0,0,0,0.1) 3px,
+                rgba(0,0,0,0.1) 4px);
             z-index: 10;
-            border-radius: 7px;
         }
+
+        /* ===== 弹窗 ===== */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.75);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            backdrop-filter: blur(4px);
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box {
+            background: #0a0a0a;
+            border: 4px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
+            padding: 24px 20px 20px 20px;
+            max-width: 340px;
+            width: 92%;
+            box-shadow: inset -4px -4px 0 #000, 0 12px 24px rgba(0,0,0,0.9);
+            position: relative;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .modal-title {
+            color: #f0e8f8;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-shadow: 2px 2px 0 #4a1a7a;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        .modal-list {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 18px 0;
+        }
+        .modal-list li {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #aaaaaa;
+            font-size: 10px;
+            line-height: 2.2;
+            padding: 4px 12px;
+            border-bottom: 2px solid #1a1a1a;
+            cursor: pointer;
+            transition: background 0.05s step-end, color 0.05s;
+            text-shadow: 1px 1px 0 #000;
+        }
+        .modal-list li:hover { background: #1a1a1a; color: #00d4c0; }
+        .modal-list li:last-child { border-bottom: none; }
+        .modal-list li.current { color: #00d4c0; }
+        .modal-song-name { flex: 1; word-break: break-word; }
+        .remove-btn {
+            background: #0a0a0a;
+            border: 2px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
+            color: #d060b0;
+            font-family: "ArkPixel12CN", "ArkPixel12", monospace;
+            font-size: 10px;
+            padding: 2px 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+            line-height: 1.4;
+            transition: all 0.03s step-end;
+        }
+        .remove-btn:hover { background: #1a1a1a; color: #ff6ee0; }
+        .remove-btn:active { transform: translate(1px, 1px); }
+        .modal-close {
+            display: block;
+            margin: 0 auto;
+            background: #0a0a0a;
+            border: 3px solid #333;
+            border-top-color: #555;
+            border-left-color: #555;
+            border-bottom-color: #111;
+            border-right-color: #111;
+            color: #aaa;
+            font-family: "ArkPixel12CN", "ArkPixel12", monospace;
+            font-size: 12px;
+            padding: 6px 20px;
+            cursor: pointer;
+            box-shadow: inset -2px -2px 0 #000;
+            transition: all 0.03s step-end;
+        }
+        .modal-close:hover { background: #1a1a1a; color: #00d4c0; }
+        .modal-close:active { transform: translate(2px, 2px); }
+
+        /* ===== 浅色主题（右键切换，localStorage 记忆） ===== */
+        body.light { background: transparent; }
+        body.light .player { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; box-shadow: inset -4px -4px 0 #aaaaaa, inset 4px 4px 0 #dddddd, 0 8px 0 #bbbbbb, 0 12px 24px rgba(0,0,0,0.15); }
+        body.light #minimizeBtn, body.light #closeBtn { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #333; box-shadow: inset -2px -2px 0 #bbbbbb; }
+        body.light #minimizeBtn:hover, body.light #closeBtn:hover { background: #f0f0f0; color: #00d4c0; }
+        body.light #closeBtn:hover { color: #e63946; }
+        body.light .title-bar { color: #999; }
+        body.light .cover-art { background: #f0f0f0; border-color: #cccccc; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; }
+        body.light .pixel-grid { background: #eaeaea; }
+        body.light .px:not(.dark-blue):not(.mid-blue):not(.cyan):not(.light-cyan):not(.purple):not(.pink):not(.white) { background: #eaeaea; }
+        body.light .px.dark-blue { background: #FFDF20; }
+        body.light .px.mid-blue { background: #9AE630; }
+        body.light .px.purple { background: #FF637E; }
+        body.light .px.pink { background: #FF637E; }
+        body.light .song-title { color: #222222; text-shadow: 3px 3px 0 #cccccc, -1px -1px 0 #00d4c0; }
+        body.light .artist { color: #555555; text-shadow: 1px 1px 0 #dddddd; }
+        body.light .time { color: #666666; }
+        body.light .progress-track { background: #eaeaea; border-color: #cccccc; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; box-shadow: inset 2px 2px 0 #bbbbbb; }
+        body.light .progress-fill { box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #00d4c0; }
+        body.light .progress-fill::after { background: #222222; border-color: #aaaaaa; box-shadow: 2px 2px 0 #bbbbbb; }
+        body.light .ctrl-btn { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #333; box-shadow: inset -2px -2px 0 #bbbbbb; }
+        body.light .ctrl-btn:hover { background: #f0f0f0; color: #00d4c0; }
+        body.light .ctrl-btn.play { background: #f0f0f0; }
+        body.light .list-badge { background: #ffffff; border-color: #cccccc; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #333; text-shadow: none; }
+        body.light .list-badge:hover { background: #f0f0f0; }
+        body.light .list-badge .label { color: #888; }
+        body.light .list-badge .number { background: #ffffff; border-color: #cccccc; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; }
+        body.light .input-area { border-top-color: #cccccc; }
+        body.light .input-row input { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #222; }
+        body.light .input-row button { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #333; }
+        body.light .input-row button:hover { background: #f0f0f0; }
+        body.light .status { color: #888; }
+        body.light .search-results li { color: #555; border-bottom-color: #dddddd; text-shadow: none; }
+        body.light .search-results li:hover { background: #f0f0f0; color: #00d4c0; }
+        body.light .add-btn { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #00a090; }
+        body.light .add-btn:hover { background: #f0f0f0; color: #007a6e; }
+        body.light .modal-overlay { background: rgba(0,0,0,0.4); }
+        body.light .modal-box { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; box-shadow: inset -4px -4px 0 #bbbbbb, 0 12px 24px rgba(0,0,0,0.2); }
+        body.light .modal-title { color: #222; text-shadow: 2px 2px 0 #cccccc; }
+        body.light .modal-list li { color: #555; border-bottom-color: #dddddd; text-shadow: none; }
+        body.light .modal-list li:hover { background: #f0f0f0; color: #00d4c0; }
+        body.light .modal-list li.current { color: #00d4c0; }
+        body.light .remove-btn { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #d060b0; }
+        body.light .remove-btn:hover { background: #f0f0f0; color: #b04090; }
+        body.light .modal-close { background: #ffffff; border-color: #cccccc; border-top-color: #dddddd; border-left-color: #dddddd; border-bottom-color: #aaaaaa; border-right-color: #aaaaaa; color: #555; }
+        body.light .modal-close:hover { background: #f0f0f0; color: #00d4c0; }
     </style>
 </head>
 <body>
     <div class="player">
         <div class="scanlines"></div>
-        <button id="closeBtn" title="关闭播放器" aria-label="关闭">✕</button>
+        <button id="minimizeBtn" title="最小化到后台（音乐继续播放）" aria-label="最小化">-</button>
+        <button id="closeBtn" title="完全退出播放器" aria-label="关闭">✕</button>
 
-        <div class="title-bar"><span>COMNYANG MUSIC</span></div>
+        <div class="title-bar" data-tauri-drag-region> COMNYANG MUSIC </div>
 
         <div class="cover-art">
             <div class="pixel-grid" id="pixelCanvas"></div>
         </div>
         <div class="song-title" id="songTitle">未加载</div>
-        <div class="artist" id="artistName">输入关键词搜索 YouTube</div>
+        <div class="artist" id="artistName">输入关键词搜索音乐</div>
 
         <div class="progress-area">
             <span class="time" id="currentTime">0:00</span>
@@ -536,23 +547,21 @@
             <span class="time" id="totalTime">0:00</span>
         </div>
 
+        <!-- 控制栏：◀◀ ▶ ■ ▶▶ + 📋 列表 同一行 -->
         <div class="controls">
             <button class="ctrl-btn" id="prevBtn">◀◀</button>
             <button class="ctrl-btn play" id="playBtn">▶</button>
             <button class="ctrl-btn" id="stopBtn">■</button>
             <button class="ctrl-btn" id="nextBtn">▶▶</button>
-        </div>
-
-        <div class="footer">
             <div class="list-badge" id="listBadge">
-                <span>📋 列表</span>
+                <span class="label">📋</span>
                 <span class="number" id="songCount">0</span>
             </div>
         </div>
 
         <div class="input-area">
             <div class="input-row">
-                <input type="text" id="searchInput" placeholder="搜索 YouTube...">
+                <input type="text" id="searchInput" placeholder="搜索音乐...">
                 <button id="searchBtn">搜索</button>
             </div>
             <div class="status" id="statusMsg">就绪</div>
@@ -581,6 +590,7 @@
         const stopBtn = document.getElementById('stopBtn');
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
+        const minimizeBtn = document.getElementById('minimizeBtn');
         const closeBtn = document.getElementById('closeBtn');
         const progressFill = document.getElementById('progressFill');
         const currentTimeEl = document.getElementById('currentTime');
@@ -598,16 +608,48 @@
         const modalCloseBtn = document.getElementById('modalCloseBtn');
         const playlistContainer = document.getElementById('playlistContainer');
 
-        // ======= 退出按钮 =======
-        closeBtn.addEventListener('click', function() {
-            invoke('close_player').catch(() => {
-                // 失败时降级：尝试直接隐藏窗口
-                try {
-                    const win = window.__TAURI__.window.getCurrentWindow();
-                    win.hide();
-                } catch (e) {}
-            });
+        // ======= 右键切换主题（深/浅色，localStorage 记忆） =======
+        const THEME_KEY = 'comnyang_player_theme';
+        function applyTheme(t) {
+            if (t === 'light') {
+                document.body.classList.add('light');
+            } else {
+                document.body.classList.remove('light');
+            }
+        }
+        function initTheme() {
+            let t = 'dark';
+            try { t = localStorage.getItem(THEME_KEY) || 'dark'; } catch(e) {}
+            applyTheme(t);
+        }
+        // 全局右键拦截 → 切换主题（与原版 my-player 行为一致）
+        document.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            const isLight = document.body.classList.contains('light');
+            const nt = isLight ? 'dark' : 'light';
+            applyTheme(nt);
+            try { localStorage.setItem(THEME_KEY, nt); } catch(e) {}
         });
+        initTheme();
+
+        // ======= 窗口控制 =======
+        // 「-」最小化到后台：仅隐藏窗口，音频继续后台播放；再次点「音乐」恢复
+        minimizeBtn.addEventListener('click', function() {
+            invoke('minimize_player').catch(() => {});
+        });
+
+        // 「✕」完全退出播放器：停止音频 + 隐藏窗口（Rust 会 emit player-exit）
+        closeBtn.addEventListener('click', function() {
+            invoke('close_player').catch(() => {});
+        });
+
+        // Rust 通知完全退出：停止音频并重置 UI
+        window.__TAURI__.event.listen('player-exit', function() {
+            stopAudio();
+            songTitle.textContent = '未加载';
+            artistName.textContent = '输入关键词搜索音乐';
+            statusMsg.textContent = '播放器已关闭';
+        }).catch(() => {});
 
         // ======= 播放列表（localStorage 持久化） =======
         const STORAGE_KEY = 'comnyang_player_playlist';
@@ -653,7 +695,7 @@
                 const li = document.createElement('li');
                 li.textContent = '列表为空，搜索后点击 + 添加';
                 li.style.cursor = 'default';
-                li.style.color = '#999';
+                li.style.color = '#666';
                 playlistContainer.appendChild(li);
                 return;
             }
@@ -838,7 +880,6 @@
         audio.addEventListener('play', function () {
             isPlaying = true;
             playBtn.textContent = '⏸';
-            artistName.textContent = 'YouTube';
             startWave();
         });
         audio.addEventListener('pause', function () {
@@ -884,7 +925,7 @@
                 song.title = result.title;
                 savePlaylist();
                 songTitle.textContent = result.title.toUpperCase();
-                artistName.textContent = 'YouTube';
+                artistName.textContent = '♪ 在线播放';
                 progressFill.style.width = '0%';
                 currentTimeEl.textContent = '0:00';
                 totalTimeEl.textContent = '0:00';
@@ -948,7 +989,7 @@
             }
         });
 
-        // ======= 调用后端命令 =======
+        // ======= 搜索 =======
         async function doSearch() {
             const query = searchInput.value.trim();
             if (!query) {
@@ -1013,7 +1054,7 @@
                 audio.src = result.url;
                 audio.load();
                 songTitle.textContent = result.title.toUpperCase();
-                artistName.textContent = 'YouTube';
+                artistName.textContent = '♪ 在线播放';
                 progressFill.style.width = '0%';
                 currentTimeEl.textContent = '0:00';
                 totalTimeEl.textContent = '0:00';
@@ -1051,7 +1092,7 @@
         }
         fetchMissingTitles();
 
-        statusMsg.textContent = '搜索 YouTube 音乐';
+        statusMsg.textContent = '搜索在线音乐';
     </script>
 </body>
 </html>

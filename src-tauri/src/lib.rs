@@ -752,23 +752,25 @@ fn show_player(app: tauri::AppHandle) -> Result<(), String> {
     Err("player window not ready".into())
 }
 
+/// ✕ 完全退出播放器：停止音频 + 隐藏窗口。再次点「音乐」重新打开。
 #[tauri::command]
 fn close_player(app: tauri::AppHandle) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(window) = app.get_webview_window("player") {
-            if let Ok(panel) = window.to_panel::<BasicPanel>() {
-                panel.hide();
-                return Ok(());
-            }
-        }
+    // 通知前端停止音频并清空播放器
+    let _ = app.emit("player-exit", ());
+    if let Some(window) = app.get_webview_window("player") {
+        let _ = window.hide();
+        return Ok(());
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Some(window) = app.get_webview_window("player") {
-            let _ = window.hide();
-            return Ok(());
-        }
+    Err("player window not ready".into())
+}
+
+/// （-）最小化到后台：仅隐藏窗口，音频继续后台播放。
+/// 再次点「音乐」即可恢复窗口控制。
+#[tauri::command]
+fn minimize_player(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("player") {
+        let _ = window.hide();
+        return Ok(());
     }
     Err("player window not ready".into())
 }
@@ -924,7 +926,8 @@ pub fn run() {
             get_audio_stream,
             get_video_title,
             show_player,
-            close_player
+            close_player,
+            minimize_player
         ])
         .on_menu_event(menu_event_handler)
         .setup(|app| {
