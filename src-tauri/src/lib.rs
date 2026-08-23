@@ -623,32 +623,113 @@ fn parse_duration(s: &str) -> u64 {
     seconds
 }
 
-/// 返回 yt-dlp 命令。**仅发布版（release，即打包后的应用）**使用随应用捆绑的
-/// sidecar 二进制（Tauri externalBin 放在可执行文件同目录：Windows 为
-/// `yt-dlp.exe`，macOS 为 `Contents/MacOS/yt-dlp`；也兼容 `bin/` 子目录）。
-/// 开发/调试模式（debug）一律用系统 PATH 中的 `yt-dlp`，避免 target 目录里的
-/// 残留/慢速二进制干扰（否则可能误用捆绑的单文件版导致搜索 20s+）。
-fn ytdlp_cmd() -> Command {
-    // debug 构建（开发调试）→ 直接走系统 yt-dlp
-    if cfg!(debug_assertions) {
-        return std::process::Command::new("yt-dlp");
-    }
+/// 查找可用的 yt-dlp 可执行文件路径。
+/// GUI 启动的应用 PATH 很有限（通常不含 Homebrew/Python 框架目录），
+/// 因此除 PATH 外还要显式探测常见安装位置：
+///   - 打包版：随应用捆绑的 sidecar（Windows only，见 tauri.windows.conf.json）
+///   - Homebrew (Apple Silicon / Intel)
+///   - python.org 官方 Python 框架
+///   - 用户 pip install --user
+/// 找不到则回退 "yt-dlp"（交给 PATH / 报错）。
+fn resolve_ytdlp_path() -> std::path::PathBuf {
+    let name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
 
-    let mut cmd = std::process::Command::new("yt-dlp");
-    // 仅 release 模式才尝试使用捆绑 sidecar
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sidecar_name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
-            // 1) exe 同目录（Tauri macOS 实际位置）
-            let same_dir = dir.join(sidecar_name);
-            // 2) bin/ 子目录（兼容布局）
-            let bin_dir = dir.join("bin").join(sidecar_name);
-            if same_dir.is_file() {
-                cmd = std::process::Command::new(same_dir);
-            } else if bin_dir.is_file() {
-                cmd = std::process::Command::new(bin_dir);
+    // 1) 发布版：捆绑 sidecar（仅 release；debug 下 target 目录可能有残留干扰）
+    if !cfg!(debug_assertions) {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let same_dir = dir.join(name);
+                let bin_dir = dir.join("bin").join(name);
+                if same_dir.is_file() {
+                    return same_dir;
+                }
+                if bin_dir.is_file() {
+                    return bin_dir;
+                }
             }
         }
+    }
+
+    // 2) 常见安装路径（GUI 启动时 PATH 里没有这些目录）
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    let home = std::env::var("HOME").unwrap_or_default();
+    // Homebrew
+    candidates.push("/opt/homebrew/bin/yt-dlp".into());
+    candidates.push("/usr/local/bin/yt-dlp".into());
+    // python.org 官方 Python 框架（各版本 + Current）
+    if let Ok(entries) = std::fs::read_dir("/Library/Frameworks/Python.framework/Versions") {
+        for e in entries.flatten() {
+            candidates.push(e.path().join("bin").join("yt-dlp"));
+        }
+    }
+    candidates.push(
+        "/Library/Frameworks/Python.framework/Versions/Current/bin/yt-dlp".into(),
+    );
+    // pip --user 安装（macOS: ~/Library/Python/<版本>/bin；通用: ~/.local/bin）
+    if !home.is_empty() {
+        let user_py = std::path::PathBuf::from(&home).join("Library/Python");
+        if let Ok(entries) = std::fs::read_dir(&user_py) {
+            for e in entries.flatten() {
+                candidates.push(e.path().join("bin").join(name));
+            }
+        }
+        candidates.push(std::path::PathBuf::from(&home).join(".local/bin").join(name));
+    }
+    // Windows pip 脚本目录
+    if cfg!(windows) {
+        candidates.push("C:\\Program Files\\yt-dlp\\yt-dlp.exe".into());
+    }
+
+    for c in candidates {
+        if c.is_file() {
+            return c;
+        }
+    }
+
+    // 3) 都没找到 → 回退到 PATH 查找（可能失败，由调用方报错）
+    std::path::PathBuf::from(name)
+}
+
+/// 返回 yt-dlp 命令。**仅发布版（release，即打包后的应用）**使用随应用捆绑的
+/// sidecar 二进制；开发/调试模式（debug）一律用系统安装的 yt-dlp。查找顺序见
+/// `resolve_ytdlp_path`——GUI 启动时 PATH 受限，需显式探测常见安装路径。
+fn ytdlp_cmd() -> Command {
+    Command::new(resolve_ytdlp_path())
+}
+
+/// 查找 node 可执行文件的绝对路径（GUI 启动时 PATH 受限，需显式探测）。
+fn resolve_node_path() -> Option<std::path::PathBuf> {
+    let candidates = [
+        "/usr/local/bin/node",
+        "/opt/homebrew/bin/node",
+        "/opt/homebrew/opt/node/bin/node",
+    ];
+    for c in candidates {
+        let p = std::path::PathBuf::from(c);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    // PATH 里找
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let p = dir.join("node");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// 给 yt-dlp 命令附加 JS 运行时参数。
+/// GUI 启动时 PATH 受限，`--js-runtimes node` 可能找不到 node → 走慢速降级。
+/// 因此这里解析 node 绝对路径并以 `node:<path>` 形式传入（yt-dlp 支持
+/// RUNTIME:PATH 语法）；找不到 node 时不传参（由 yt-dlp 自行降级）。
+fn with_js_runtime(cmd: Command) -> Command {
+    let mut cmd = cmd;
+    if let Some(node) = resolve_node_path() {
+        cmd.args(["--js-runtimes", &format!("node:{}", node.display())]);
     }
     cmd
 }
@@ -666,7 +747,7 @@ async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
         }
     }
 
-    let output = ytdlp_cmd()
+    let output = with_js_runtime(ytdlp_cmd())
         .args([
             &format!("ytsearch5:{}", query),
             "--print",
@@ -678,8 +759,6 @@ async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
             "--print",
             "uploader",
             "--no-playlist",
-            "--js-runtimes",
-            "node",
         ])
         .output()
         .map_err(|e| format!("yt-dlp 执行失败: {}", e))?;
@@ -725,12 +804,10 @@ async fn get_video_title(url: String) -> Result<String, String> {
         format!("https://youtube.com/watch?v={}", url)
     };
 
-    let output = ytdlp_cmd()
+    let output = with_js_runtime(ytdlp_cmd())
         .args([
             "--get-title",
             "--no-playlist",
-            "--js-runtimes",
-            "node",
             &full_url,
         ])
         .output()
@@ -769,7 +846,7 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
         }
     }
 
-    let output = ytdlp_cmd()
+    let output = with_js_runtime(ytdlp_cmd())
         .args([
             "-f",
             // 优先 m4a/AAC（WebKit 对 AAC 的 seek 支持完善），回退到其他音频。
@@ -785,8 +862,6 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
             "--print",
             "duration",
             "--no-playlist",
-            "--js-runtimes",
-            "node",
             &full_url,
         ])
         .output()
