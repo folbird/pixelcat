@@ -3,10 +3,13 @@ use keytap::{EventKind, Tap};
 use std::ffi::c_void;
 #[cfg(target_os = "macos")]
 use std::ptr;
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration; // macOS/Windows 的 start_refresh_loop 都用它 sleep 光标轮询
 use tauri::menu::CheckMenuItem;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use serde::Serialize;
+use tauri::command;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, LogicalSize, Manager, Size, WebviewWindow};
 
@@ -411,6 +414,9 @@ fn build_context_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>>
         &[&reminder, &pomodoro, &stretch],
     )?;
 
+    // 「音乐」按钮：打开独立 YouTube 音乐播放器窗口
+    let music = MenuItem::with_id(app, "music", "音乐", true, None::<&str>)?;
+
     let settings = build_settings_submenu(app)?;
     let choose_cat = MenuItem::with_id(app, "choose_cat", "更换小猫", true, None::<&str>)?;
     let tell_name = MenuItem::with_id(app, "todo_name", "告诉我名字", true, None::<&str>)?;
@@ -422,6 +428,8 @@ fn build_context_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>>
             &PredefinedMenuItem::separator(app)?,
             &choose_cat,
             &tell_name,
+            &PredefinedMenuItem::separator(app)?,
+            &music,
             &PredefinedMenuItem::separator(app)?,
             &settings, // 设置子菜单放最底部
         ],
@@ -524,6 +532,9 @@ fn menu_event_handler(app: &tauri::AppHandle, event: MenuEvent) {
             }
             let _ = app.emit("open-pomodoro", ());
         }
+        "music" => {
+            let _ = show_player(app.clone());
+        }
         "water_reminder" => emit_water_reminder(app),
         "choose_cat" => {
             let _ = app.emit("open-cat-dialog", ());
@@ -569,9 +580,202 @@ fn sync_pin_checks(app: &tauri::AppHandle, pinned: bool) {
     }
 }
 
+// ============================================================
+// 音乐播放器（YouTube / yt-dlp）
+// 集成自 my-player 项目：搜索、获取音频流、获取标题三个命令，
+// 通过系统 yt-dlp + node 解析 YouTube 音频流。
+// ============================================================
+
+#[derive(Serialize, Clone)]
+struct SearchItem {
+    video_id: String,
+    title: String,
+    author: String,
+    duration: u64,
+    thumbnail: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AudioStream {
+    url: String,
+    title: String,
+}
+
+/// 把 "2:15" / "1:02:33" 解析为秒数。
+fn parse_duration(s: &str) -> u64 {
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    let mut seconds: u64 = 0;
+    for part in parts {
+        seconds = seconds * 60 + part.parse::<u64>().unwrap_or(0);
+    }
+    seconds
+}
+
+#[command]
+async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
+    let output = Command::new("yt-dlp")
+        .args([
+            &format!("ytsearch5:{}", query),
+            "--get-id",
+            "--get-title",
+            "--get-duration",
+            "--no-playlist",
+            "--js-runtimes",
+            "node",
+            "--remote-components",
+            "ejs:github",
+        ])
+        .output()
+        .map_err(|e| format!("yt-dlp 执行失败: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("yt-dlp 搜索错误: {}", err));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let mut items = Vec::new();
+    let mut i = 0;
+    // yt-dlp outputs: title, id, duration (per video)
+    while i + 2 < lines.len() {
+        let title = lines[i].trim().to_string();
+        let video_id = lines[i + 1].trim().to_string();
+        let duration = parse_duration(lines[i + 2]);
+        items.push(SearchItem {
+            video_id,
+            title,
+            author: String::new(),
+            duration,
+            thumbnail: None,
+        });
+        i += 3;
+    }
+    Ok(items)
+}
+
+#[command]
+async fn get_video_title(url: String) -> Result<String, String> {
+    let full_url = if url.starts_with("http") {
+        url
+    } else {
+        format!("https://youtube.com/watch?v={}", url)
+    };
+
+    let output = Command::new("yt-dlp")
+        .args([
+            "--get-title",
+            "--no-playlist",
+            "--js-runtimes",
+            "node",
+            "--remote-components",
+            "ejs:github",
+            &full_url,
+        ])
+        .output()
+        .map_err(|e| format!("yt-dlp 执行失败: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("yt-dlp 错误: {}", err));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let title = stdout
+        .lines()
+        .next()
+        .ok_or("未获取到标题")?
+        .trim()
+        .to_string();
+
+    Ok(title)
+}
+
+#[command]
+async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
+    let full_url = if url.starts_with("http") {
+        url
+    } else {
+        format!("https://youtube.com/watch?v={}", url)
+    };
+
+    let output = Command::new("yt-dlp")
+        .args([
+            "-f",
+            "bestaudio",
+            "--get-url",
+            "--get-title",
+            "--no-playlist",
+            "--js-runtimes",
+            "node",
+            "--remote-components",
+            "ejs:github",
+            &full_url,
+        ])
+        .output()
+        .map_err(|e| format!("yt-dlp 执行失败: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("yt-dlp 错误: {}", err));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    // yt-dlp outputs: title | url
+    let title = lines.next().ok_or("未获取到标题")?.trim().to_string();
+    let audio_url = lines.next().ok_or("未获取到音频URL")?.trim().to_string();
+
+    Ok(AudioStream { url: audio_url, title })
+}
+
+/// 显示/隐藏独立音乐播放器窗口（macOS 上转成 NSPanel，其他平台直接显示/隐藏）。
+#[tauri::command]
+fn show_player(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window) = app.get_webview_window("player") {
+            if let Ok(panel) = window.to_panel::<BasicPanel>() {
+                panel.show_and_make_key();
+                return Ok(());
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(window) = app.get_webview_window("player") {
+            let _ = window.show();
+            let _ = window.set_focus();
+            return Ok(());
+        }
+    }
+    Err("player window not ready".into())
+}
+
+#[tauri::command]
+fn close_player(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window) = app.get_webview_window("player") {
+            if let Ok(panel) = window.to_panel::<BasicPanel>() {
+                panel.hide();
+                return Ok(());
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(window) = app.get_webview_window("player") {
+            let _ = window.hide();
+            return Ok(());
+        }
+    }
+    Err("player window not ready".into())
+}
+
 /// 前端上报「猫在窗口内的命中矩形」（逻辑像素，相对窗口左上角）。
 /// 由 canvas 非透明像素包围盒计算，每 ~100ms 上报一次；Rust 侧据此动态
-/// 切换 set_ignore_cursor_events，实现"透明区穿透、猫体可交互"。
+/// 切换 set_ignore_cursor_events，实现"透明穿透、猫体可交互"。
 #[tauri::command]
 fn set_pet_hitbox(
     x: f64,
@@ -715,7 +919,12 @@ pub fn run() {
             show_water_log,
             hide_water_log,
             set_pet_hitbox,
-            set_window_dragging
+            set_window_dragging,
+            search_youtube,
+            get_audio_stream,
+            get_video_title,
+            show_player,
+            close_player
         ])
         .on_menu_event(menu_event_handler)
         .setup(|app| {
@@ -738,6 +947,18 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 if let Some(window) = app.get_webview_window("water-log") {
+                    make_panel_float_on_top(&window);
+                    if let Ok(panel) = window.to_panel::<BasicPanel>() {
+                        panel.hide();
+                    }
+                }
+            }
+
+            // 独立音乐播放器窗口：与 water-log 同一路径，转成 NSPanel 并默认隐藏；
+            // 前端右键菜单「音乐」通过 show_player 命令显示。
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app.get_webview_window("player") {
                     make_panel_float_on_top(&window);
                     if let Ok(panel) = window.to_panel::<BasicPanel>() {
                         panel.hide();

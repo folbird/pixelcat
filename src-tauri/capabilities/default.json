@@ -4,7 +4,8 @@
   "description": "Capability for the main window",
   "windows": [
     "main",
-    "water-log"
+    "water-log",
+    "player"
   ],
   "permissions": [
     "core:default",
