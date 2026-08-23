@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::process::Command;
 use std::sync::Mutex;
+use std::collections::HashMap;
 use std::time::Duration; // macOS/Windows 的 start_refresh_loop 都用它 sleep 光标轮询
 use tauri::menu::CheckMenuItem;
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -595,7 +596,7 @@ struct SearchItem {
     thumbnail: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct AudioStream {
     url: String,
     title: String,
@@ -604,6 +605,10 @@ struct AudioStream {
     /// 读取不准（如 4 分钟被读成 8 分钟），前端应优先用本字段显示总时长。
     duration: u64,
 }
+
+// 音频流解析结果缓存：key = 视频完整 URL。解析一次（约 4s）后缓存，
+// 同一视频再次播放/切换直接命中秒开，避免每次都重新跑 yt-dlp。
+static AUDIO_CACHE: Mutex<Option<HashMap<String, AudioStream>>> = Mutex::new(None);
 
 /// 把 "2:15" / "1:02:33" 解析为秒数。
 fn parse_duration(s: &str) -> u64 {
@@ -735,6 +740,15 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
         format!("https://youtube.com/watch?v={}", url)
     };
 
+    // 命中缓存直接返回（同一视频秒开，避免重复跑 yt-dlp 解析）
+    if let Ok(guard) = AUDIO_CACHE.lock() {
+        if let Some(map) = guard.as_ref() {
+            if let Some(hit) = map.get(&full_url) {
+                return Ok(hit.clone());
+            }
+        }
+    }
+
     let output = ytdlp_cmd()
         .args([
             "-f",
@@ -777,7 +791,13 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
         .parse()
         .unwrap_or_else(|_| parse_duration(duration_str));
 
-    Ok(AudioStream { url: audio_url, title, author, duration })
+    let stream = AudioStream { url: audio_url, title, author, duration };
+    // 写入缓存，同一视频下次播放秒开
+    if let Ok(mut guard) = AUDIO_CACHE.lock() {
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.insert(full_url, stream.clone());
+    }
+    Ok(stream)
 }
 
 /// 显示/隐藏独立音乐播放器窗口（macOS 上转成 NSPanel，其他平台直接显示/隐藏）。
