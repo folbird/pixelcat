@@ -196,6 +196,14 @@ const CAT_BREEDS = window.CAT_BREEDS || {};
 const CAT_BREED_IDS = Object.keys(CAT_BREEDS);
 const CAT_BREED_DEFAULT = CAT_BREED_IDS[0] || 'black-cat';
 
+// ---- 耳机叠加（戴耳机状态）----
+// 打开音乐播放器 → 猫戴上耳机；退出/关闭 → 恢复 idle 无耳机。
+// 耳机矩阵 17 行 × 36 列（相对 base 矩阵叠加），固定调色板（不随品种变化）。
+// 双调色板：耳机像素用 EARPHONE.palette，猫身像素用品种 palette，二者互不影响。
+const EARPHONE = window.EARPHONE || { rows: [], palette: [] };
+let musicActive = false;
+
+
 // 当前品种 id（localStorage 持久化，默认第一个品种）。
 let currentBreed = CAT_BREED_DEFAULT;
 try {
@@ -290,7 +298,12 @@ function drawIdleFrame() {
   const height = rows.length * cell;
   // 新矩阵 34×34，画布 128×128 → 猫主体 102×102，垂直居中对齐
   const originX = Math.round((canvas.width - width) / 2);
-  const originY = Math.round((canvas.height - height) / 2);
+  let originY = Math.round((canvas.height - height) / 2);
+  // 戴耳机时：顶部让出 5 行（15px）给耳机头梁（耳机相对 base 在猫头顶上方 5 行），
+  // 猫身/眼睛整体下移；idle 高 108 → originY=15 时底部 123<128 仍在画布内。
+  // originX 保持不变（猫身与眼睛定位依赖它），耳机左右耳罩以 originX-2cell 为起点
+  // 仍能完整落在画布内（耳机宽 36 列，最左 x=originX-6≥0，最右 x≤112<128）。
+  if (musicActive) originY = 15;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -378,6 +391,24 @@ function drawIdleFrame() {
         pupilW,
         pupilH
       );
+    }
+  }
+
+  // ---- 戴耳机：耳机层（双调色板覆盖层，固定 EARPHONE.palette）----
+  // 耳机矩阵相对 base（= idle 前加 5 行0 + 每行前加 2 个0）叠加在前 17 行；
+  // 因此耳机 overlay (i,j) 在画布上的位置 = base(i,j) = idle(i-5, j-2)。
+  // 仅覆盖耳机像素（非'0'），猫身像素仍用品种 palette（互不影响）。
+  if (musicActive && EARPHONE.rows.length > 0) {
+    for (let i = 0; i < EARPHONE.rows.length; i++) {
+      const erow = EARPHONE.rows[i];
+      for (let j = 0; j < erow.length; j++) {
+        const code = erow.charCodeAt(j) - 48; // '0'=0 ...
+        if (code === 0) continue;
+        const color = EARPHONE.palette[code - 1];
+        if (!color) continue;
+        ctx.fillStyle = color;
+        ctx.fillRect(originX + (j - 2) * cell, originY + (i - 5) * cell, cell, cell);
+      }
     }
   }
 
@@ -1862,6 +1893,16 @@ function init() {
     // 点「更换小猫」菜单项：打开中文品种选择弹窗
     T.event.listen('open-cat-dialog', () => {
       openCatDialog();
+    });
+    // 点「音乐」菜单项 → 猫戴上耳机（Rust show_player 会 emit player-open）
+    T.event.listen('player-open', () => {
+      musicActive = true;
+      if (petState !== 'typing') drawIdleFrame();
+    });
+    // 关闭播放器（✕）→ 恢复 idle 无耳机（Rust close_player 会 emit player-exit）
+    T.event.listen('player-exit', () => {
+      musicActive = false;
+      if (petState !== 'typing') drawIdleFrame();
     });
   }
 

@@ -745,6 +745,8 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
 /// 显示/隐藏独立音乐播放器窗口（macOS 上转成 NSPanel，其他平台直接显示/隐藏）。
 #[tauri::command]
 fn show_player(app: tauri::AppHandle) -> Result<(), String> {
+    // 通知主窗口：音乐播放器打开 → 猫戴上耳机
+    let _ = app.emit("player-open", ());
     #[cfg(target_os = "macos")]
     {
         if let Some(window) = app.get_webview_window("player") {
