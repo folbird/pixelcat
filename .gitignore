@@ -26,3 +26,7 @@ dist-ssr
 # Tauri build artifacts
 /src-tauri/target
 /release
+
+# 捆绑的 yt-dlp 二进制（大文件，CI 下载生成，不入库）
+/src-tauri/bin/yt-dlp*
+!/src-tauri/bin/README.md

@@ -615,9 +615,34 @@ fn parse_duration(s: &str) -> u64 {
     seconds
 }
 
+/// 返回 yt-dlp 命令。优先使用随应用捆绑的 sidecar 二进制（Tauri externalBin
+/// 会把 sidecar 放在可执行文件同目录：Windows 为 `yt-dlp.exe`，macOS 为
+/// `Contents/MacOS/yt-dlp`；也兼容某些情况下的 `bin/` 子目录），找不到时才
+/// 回退到系统 PATH 中的 `yt-dlp`。这样打包后用户无需安装 yt-dlp/Python。
+fn ytdlp_cmd() -> Command {
+    let mut cmd = std::process::Command::new("yt-dlp");
+    // 当前可执行文件目录（Windows: exe 所在目录；macOS: Contents/MacOS/）
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sidecar_name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+            // 1) exe 同目录（Tauri macOS 实际位置）
+            let same_dir = dir.join(sidecar_name);
+            // 2) bin/ 子目录（兼容布局）
+            let bin_dir = dir.join("bin").join(sidecar_name);
+            if same_dir.is_file() {
+                cmd = std::process::Command::new(same_dir);
+            } else if bin_dir.is_file() {
+                cmd = std::process::Command::new(bin_dir);
+            }
+        }
+    }
+    cmd
+}
+
+
 #[command]
 async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
-    let output = Command::new("yt-dlp")
+    let output = ytdlp_cmd()
         .args([
             &format!("ytsearch5:{}", query),
             "--print",
@@ -630,7 +655,7 @@ async fn search_youtube(query: String) -> Result<Vec<SearchItem>, String> {
             "uploader",
             "--no-playlist",
             "--js-runtimes",
-            "node",
+            "deno",
             "--remote-components",
             "ejs:github",
         ])
@@ -673,12 +698,12 @@ async fn get_video_title(url: String) -> Result<String, String> {
         format!("https://youtube.com/watch?v={}", url)
     };
 
-    let output = Command::new("yt-dlp")
+    let output = ytdlp_cmd()
         .args([
             "--get-title",
             "--no-playlist",
             "--js-runtimes",
-            "node",
+            "deno",
             "--remote-components",
             "ejs:github",
             &full_url,
@@ -710,7 +735,7 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
         format!("https://youtube.com/watch?v={}", url)
     };
 
-    let output = Command::new("yt-dlp")
+    let output = ytdlp_cmd()
         .args([
             "-f",
             // 优先 m4a/AAC（WebKit 对 AAC 的 seek 支持完善），回退到其他音频。
@@ -727,7 +752,7 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
             "duration",
             "--no-playlist",
             "--js-runtimes",
-            "node",
+            "deno",
             "--remote-components",
             "ejs:github",
             &full_url,
