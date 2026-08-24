@@ -854,8 +854,10 @@ async fn get_audio_stream(url: String) -> Result<AudioStream, String> {
             "-f",
             // 优先 m4a/AAC（WebKit 对 AAC 的 seek 支持完善），回退到其他音频。
             // 注意：不能用 webm/opus，Tauri 的 WebKit 对 opus 流 seek（拖动进度条）后
-            // 缓冲恢复支持差 → 跳到中间会无声。m4a 是最稳的。
-            "bestaudio[ext=m4a]/bestaudio",
+            // 缓冲恢复支持差 → 跳到中间会无声。
+            // 优先用 HLS (234) —— WebKit/AVFoundation 对 HLS 原生并行分片拉取，
+            // 天然规避 googlevideo 单连接限速(长视频30s+预热)。无 HLS 时回退 m4a。
+            "234/bestaudio[ext=m4a]/bestaudio",
             "--print",
             "title",
             "--print",
