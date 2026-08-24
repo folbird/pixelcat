@@ -879,13 +879,21 @@
             }
         }
 
+        let autoNextFired = false; // 防止同一首重复触发自动切歌
+
         function updateProgress() {
             // 优先用后端真实时长；未取得时回退到 audio.duration。
             const dur = trackDuration > 0 ? trackDuration : audio.duration;
             if (dur && !isNaN(dur)) {
-                const percent = (audio.currentTime / dur) * 100;
+                const percent = Math.min(100, (audio.currentTime / dur) * 100);
                 progressFill.style.width = percent + '%';
                 currentTimeEl.textContent = formatTime(audio.currentTime);
+                // 到末尾即自动切歌（yt-dlp 流在 WebKit 下经常不触发 ended，
+                // 手动兜底：当前时间 >= 总时长 → 切下一首）
+                if (!autoNextFired && audio.currentTime >= dur - 0.5 && playlist.length > 0) {
+                    autoNextFired = true;
+                    nextSong();
+                }
             }
         }
 
@@ -898,7 +906,8 @@
             }
         });
         audio.addEventListener('ended', function () {
-            // 自动播放下一首
+            // 自动播放下一首（部分流能正常触发 ended，这里同样兜底）
+            autoNextFired = true;
             if (playlist.length > 0) {
                 nextSong();
             } else {
@@ -955,6 +964,7 @@
                 audio.load();
                 song.title = result.title;
                 savePlaylist();
+                autoNextFired = false; // 新歌重置自动切歌标记
                 // 记录后端真实时长（WebKit 的 audio.duration 不可靠）
                 trackDuration = result.duration || 0;
                 songTitle.textContent = result.title.toUpperCase();

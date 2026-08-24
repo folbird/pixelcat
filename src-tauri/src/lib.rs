@@ -722,12 +722,15 @@ fn resolve_node_path() -> Option<std::path::PathBuf> {
     None
 }
 
-/// 给 yt-dlp 命令附加 JS 运行时参数。
-/// GUI 启动时 PATH 受限，`--js-runtimes node` 可能找不到 node → 走慢速降级。
-/// 因此这里解析 node 绝对路径并以 `node:<path>` 形式传入（yt-dlp 支持
-/// RUNTIME:PATH 语法）；找不到 node 时不传参（由 yt-dlp 自行降级）。
+/// 给 yt-dlp 命令附加 JS 运行时 + UTF-8 编码参数。
+/// - JS 运行时：GUI 启动时 PATH 受限，`--js-runtimes node` 可能找不到 node →
+///   走慢速降级；解析 node 绝对路径以 `node:<path>` 传入（yt-dlp 支持
+///   RUNTIME:PATH 语法）。找不到 node 时不传参。
+/// - 编码：Windows 下 yt-dlp 默认按本地代码页(GBK)输出中文 → Rust 用 UTF-8
+///   解码会乱码。强制 `--encoding utf-8` 保证输出统一 UTF-8。
 fn with_js_runtime(cmd: Command) -> Command {
     let mut cmd = cmd;
+    cmd.args(["--encoding", "utf-8"]);
     if let Some(node) = resolve_node_path() {
         cmd.args(["--js-runtimes", &format!("node:{}", node.display())]);
     }
