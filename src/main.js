@@ -1093,12 +1093,13 @@ let lastReportedHitbox = '';
 // ============================================================
 // 语录轮播：每 15 分钟换一条一言，显示 1 分钟
 // ============================================================
-// 使用一言 API（https://v1.hitokoto.cn/）——免费、无需 API key、返回 JSON：
-//   { hitokoto: "一句话", from: "来源", ... }
+// 使用「一言随机句子」API（https://api.xygeng.cn/one）——免费、无需 API key、返回 JSON：
+//   { code, data: { content: "一句话", ... } }
+// 只取 data.data.content 这一句，其余作者/出处等一律不用。
 // 网络失败时用本地备选语录兜底（保证离线也有内容）。
 const QUOTE_INTERVAL_MS = 15 * 60 * 1000; // 每 15 分钟换一条
 const QUOTE_VISIBLE_MS = 60 * 1000;       // 每条显示 1 分钟
-const QUOTE_API = 'https://v1.hitokoto.cn/?encode=json&c=i&c=a&c=b&c=k';
+const QUOTE_API = 'https://api.xygeng.cn/one';
 const FALLBACK_QUOTES = [
   '喵～今天也要加油呀！',
   '别忘了喝水哦 💧',
@@ -1122,8 +1123,10 @@ function fetchQuote() {
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => {
       if (timer) clearTimeout(timer);
-      if (data && typeof data.hitokoto === 'string' && data.hitokoto.trim()) {
-        return data.hitokoto.trim();
+      // 新接口返回 { code, data: { content, ... } }，只取 content
+      const content = data && data.data && data.data.content;
+      if (typeof content === 'string' && content.trim()) {
+        return content.trim();
       }
       return null;
     })
